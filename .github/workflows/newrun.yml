@@ -49,23 +49,25 @@ jobs:
           # Buat folder output
           mkdir -p $GITHUB_WORKSPACE/output_builds
           
-          # Copy plugin dan plugins.json
+          # Copy plugin hasil build (.cs3 dan .jar)
           cp **/build/*.cs3 $GITHUB_WORKSPACE/output_builds/ || true
           cp **/build/*.jar $GITHUB_WORKSPACE/output_builds/ || true
+          
+          # Copy plugins.json yang baru digenerate gradle
           cp build/plugins.json $GITHUB_WORKSPACE/output_builds/ || true
 
-          # MEMBUAT FILE repo.json SECARA OTOMATIS
-          cat <<EOF > $GITHUB_WORKSPACE/output_builds/repo.json
-          {
-              "name": "Michat88 Repo",
-              "iconUrl": "https://github.com/michat88.png",
-              "description": "Repository Plugin Michat88",
-              "manifestVersion": 1,
-              "pluginLists": [
-                "https://raw.githubusercontent.com/michat88/PremiumRepo/builds/plugins.json"
-              ]
-          }
-          EOF
+          # --- PERUBAHAN DI SINI ---
+          # Kita tidak lagi generate repo.json baru.
+          # Kita hanya COPY file repo.json yang sudah kamu buat manual di folder src.
+          if [ -f "repo.json" ]; then
+              echo "Menyalin repo.json statis..."
+              cp repo.json $GITHUB_WORKSPACE/output_builds/
+          else
+              echo "ERROR: File repo.json tidak ditemukan di folder src! Pastikan kamu membuatnya manual."
+              # Opsional: Uncomment baris bawah jika ingin tetap generate otomatis sebagai cadangan darurat
+              # exit 1 
+          fi
+          # -------------------------
 
       - name: Push to builds branch
         run: |
