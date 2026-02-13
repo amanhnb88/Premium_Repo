@@ -25,6 +25,7 @@ class MangoPorn : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+        // Pagination logic: https://mangoporn.net/page/2/
         val url = if (page == 1) {
             request.data
         } else {
@@ -45,17 +46,17 @@ class MangoPorn : MainAPI() {
         val title = titleElement.text().trim()
         val url = titleElement.attr("href")
         
-        // Handle Lazy Load (WP Fastest Cache)
+        // PENTING: Handle Lazy Load WP Fastest Cache (data-wpfc-original-src)
+        // Jika atribut wpfc tidak ada, fallback ke src biasa
         val imgElement = element.selectFirst("div.poster img")
         val posterUrl = imgElement?.attr("data-wpfc-original-src")?.ifEmpty { 
             imgElement.attr("src") 
         }
 
-        val duration = element.selectFirst("span.duration")?.text()?.trim()
-
+        // PERBAIKAN: addDuration dihapus karena tidak didukung di SearchResponse Cloudstream saat ini
+        
         return newMovieSearchResponse(title, url, TvType.NSFW) {
             this.posterUrl = posterUrl
-            addDuration(duration)
         }
     }
 
@@ -63,7 +64,8 @@ class MangoPorn : MainAPI() {
     // 2. SEARCH
     // ==============================
     override suspend fun search(query: String): List<SearchResponse> {
-        // Fix: Encode query untuk menangani spasi (wife husband -> wife+husband)
+        // Fix: Encode query space to + (standard WordPress search)
+        // Contoh: "wife husband" -> "wife+husband"
         val fixedQuery = query.replace(" ", "+")
         
         val url = "$mainUrl/?s=$fixedQuery"
@@ -89,12 +91,16 @@ class MangoPorn : MainAPI() {
             imgElement.attr("src") 
         }
 
+        // Mengambil Tags (Genre)
         val tags = document.select(".sgeneros a, .persons a[href*='/genre/']").map { it.text() }
         
+        // Mengambil Tahun
         val year = document.selectFirst(".textco a[href*='/year/']")?.text()?.toIntOrNull()
         
+        // Mengambil Aktor (Pornstars) yang ada di div #cast
+        // PERBAIKAN: Dibungkus dengan ActorData() agar sesuai tipe data
         val actors = document.select("#cast .persons a[href*='/pornstar/']").map { 
-            Actor(it.text(), null) 
+            ActorData(Actor(it.text(), null)) 
         }
 
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
@@ -107,7 +113,7 @@ class MangoPorn : MainAPI() {
     }
 
     // ==============================
-    // 4. LOAD LINKS
+    // 4. LOAD LINKS (PLAYER)
     // ==============================
     override suspend fun loadLinks(
         data: String,
@@ -117,15 +123,18 @@ class MangoPorn : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // Target Link Langsung di List Player
+        // STRATEGI 1: Link Langsung di List Player (#playeroptionsul)
+        // Ini metode paling akurat berdasarkan data HTML terakhir
         document.select("#playeroptionsul li a").forEach { link ->
             val href = link.attr("href")
+            // Filter link valid
             if (href.startsWith("http")) {
                 loadExtractor(href, data, subtitleCallback, callback)
             }
         }
 
-        // Fallback Iframe
+        // STRATEGI 2: Iframe Fallback (Jika tidak ada list opsi)
+        // Kadang player utama ada di dalam iframe #playcontainer
         document.select("#playcontainer iframe").forEach { iframe ->
             val src = iframe.attr("src")
             if (src.startsWith("http")) {
