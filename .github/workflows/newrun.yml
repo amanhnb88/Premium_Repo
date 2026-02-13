@@ -34,40 +34,61 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # LANGKAH BARU: Ambil repo.json yang sudah ada di branch builds
+      - name: Checkout Existing Builds Branch
+        uses: actions/checkout@v4
+        with:
+          ref: builds
+          path: "old_builds"
+        continue-on-error: true # Lanjut saja kalau branch builds belum ada (pertama kali run)
+
       - name: Create local.properties
         run: |
           cd $GITHUB_WORKSPACE/src
           touch local.properties
 
-      - name: Build Plugins and Generate Repo Info
+      - name: Build Plugins
         run: |
           cd $GITHUB_WORKSPACE/src
           chmod +x gradlew
+          
+          # Build plugin (.cs3) dan plugins.json
           ./gradlew make makePluginsJson
           ./gradlew ensureJarCompatibility
+          
+          if [ ! -f "build/plugins.json" ]; then
+            echo "ERROR: build/plugins.json tidak ditemukan! Build Gagal."
+            exit 1
+          fi
           
           # Buat folder output
           mkdir -p $GITHUB_WORKSPACE/output_builds
           
-          # Copy plugin hasil build (.cs3 dan .jar)
+          # Copy file hasil build
           cp **/build/*.cs3 $GITHUB_WORKSPACE/output_builds/ || true
           cp **/build/*.jar $GITHUB_WORKSPACE/output_builds/ || true
-          
-          # Copy plugins.json yang baru digenerate gradle
           cp build/plugins.json $GITHUB_WORKSPACE/output_builds/ || true
 
-          # --- PERUBAHAN DI SINI ---
-          # Kita tidak lagi generate repo.json baru.
-          # Kita hanya COPY file repo.json yang sudah kamu buat manual di folder src.
-          if [ -f "repo.json" ]; then
-              echo "Menyalin repo.json statis..."
-              cp repo.json $GITHUB_WORKSPACE/output_builds/
+          # --- LOGIKA PENYELAMATAN REPO.JSON ---
+          # Cek apakah ada repo.json di branch builds yang lama
+          if [ -f "$GITHUB_WORKSPACE/old_builds/repo.json" ]; then
+              echo "Menggunakan repo.json yang sudah ada dari branch builds..."
+              cp $GITHUB_WORKSPACE/old_builds/repo.json $GITHUB_WORKSPACE/output_builds/
           else
-              echo "ERROR: File repo.json tidak ditemukan di folder src! Pastikan kamu membuatnya manual."
-              # Opsional: Uncomment baris bawah jika ingin tetap generate otomatis sebagai cadangan darurat
-              # exit 1 
+              echo "repo.json belum ada. Membuat baru..."
+              cat <<'EOF' > $GITHUB_WORKSPACE/output_builds/repo.json
+          {
+              "name": "Michat88 Repo",
+              "iconUrl": "https://github.com/michat88.png",
+              "description": "Repository Plugin Michat88",
+              "manifestVersion": 1,
+              "pluginLists": [
+                "https://raw.githubusercontent.com/michat88/PremiumRepo/builds/plugins.json"
+              ]
+          }
+          EOF
           fi
-          # -------------------------
+          # -------------------------------------
 
       - name: Push to builds branch
         run: |
