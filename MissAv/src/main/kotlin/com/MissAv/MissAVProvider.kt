@@ -47,7 +47,6 @@ class MissAVProvider : MainAPI() {
         return newHomePageResponse(request.name, items, hasNext = items.isNotEmpty())
     }
 
-    // Helper: Mengubah elemen HTML video menjadi data SearchResponse
     private fun toSearchResult(element: Element): SearchResponse? {
         val linkElement = element.selectFirst("a.text-secondary") ?: return null
         val url = linkElement.attr("href").toUrl()
@@ -112,7 +111,7 @@ class MissAVProvider : MainAPI() {
     }
 
     // ==============================
-    // 5. PLAYER + SUBTITLE (FIXED)
+    // 5. PLAYER + SMART ACCURATE SUBTITLE
     // ==============================
     override suspend fun loadLinks(
         data: String,
@@ -142,20 +141,18 @@ class MissAVProvider : MainAPI() {
                 }
             )
 
-            // --- LOGIKA PENCARIAN SUBTITLE DIPERBAIKI ---
+            // --- LOGIKA AKURASI TINGGI ---
             val title = document.selectFirst("h1.text-base.text-nord6")?.text()?.trim() ?: ""
             
-            // Regex mencari Kode (Misal: JUR-613, SSIS-992, IPX-123)
-            // Pola: Huruf 2-5 digit, tanda strip, Angka 3-5 digit
+            // 1. Ekstrak KODE ID (Wajib ada). Contoh: SSIS-669, IPX-123
             val codeRegex = """([A-Za-z]{2,5}-[0-9]{3,5})""".toRegex()
             val codeMatch = codeRegex.find(title)
             val code = codeMatch?.value
             
-            // Prioritaskan cari pakai Kode. Kalau tidak ada kode, pakai Judul full (walau jarang akurat)
-            val query = code ?: title
-            
-            if (query.isNotBlank()) {
-                fetchSubtitleCat(query, subtitleCallback)
+            // Hanya cari subtitle jika KODE ditemukan. 
+            // Jika tidak ada kode, jangan cari (karena pencarian judul teks biasa sering salah film)
+            if (!code.isNullOrEmpty()) {
+                fetchSubtitleCatStrict(code, subtitleCallback)
             }
             
             return true
@@ -165,41 +162,67 @@ class MissAVProvider : MainAPI() {
     }
 
     // ==============================
-    // 6. HELPER SUBTITLE (LOGIKA BARU 2 LANGKAH)
+    // 6. HELPER SUBTITLE STRICT MODE
     // ==============================
-    private suspend fun fetchSubtitleCat(query: String, subtitleCallback: (SubtitleFile) -> Unit) {
+    private suspend fun fetchSubtitleCatStrict(codeId: String, subtitleCallback: (SubtitleFile) -> Unit) {
         try {
-            // LANGKAH 1: Buka Halaman Pencarian
-            val searchUrl = "https://www.subtitlecat.com/index.php?search=$query"
+            // Langkah 1: Cari berdasarkan KODE ID saja agar hasil relevan
+            val searchUrl = "https://www.subtitlecat.com/index.php?search=$codeId"
             val searchDoc = app.get(searchUrl).document
 
-            // Ambil link hasil pertama dari tabel (table.sub-table)
-            // Selector ini mengambil href dari elemen <a> di kolom pertama
-            val firstResultLink = searchDoc.selectFirst("table.sub-table tbody tr td a")?.attr("href")
+            // Ambil baris tabel hasil pencarian
+            val rows = searchDoc.select("table.sub-table tbody tr")
 
-            if (!firstResultLink.isNullOrEmpty()) {
-                // Perbaiki URL karena link dari website bersifat relative (subs/...)
-                val detailPageUrl = if (firstResultLink.startsWith("http")) firstResultLink else "https://www.subtitlecat.com/$firstResultLink"
+            // Variabel counter agar tidak mengambil terlalu banyak (maksimal 3 varian teratas)
+            var variantsFound = 0
+            val maxVariants = 3 
 
-                // LANGKAH 2: Buka Halaman Detail Subtitle
-                val detailDoc = app.get(detailPageUrl).document
+            // Loop setiap hasil pencarian
+            for (row in rows) {
+                if (variantsFound >= maxVariants) break
 
-                // Ambil semua kotak subtitle (div.sub-single)
-                detailDoc.select("div.sub-single").forEach { element ->
-                    // Ambil Bahasa (Span ke-2)
-                    val lang = element.select("span").getOrNull(1)?.text()?.trim() ?: "Unknown"
+                val linkElement = row.selectFirst("td a") ?: continue
+                val resultTitle = linkElement.text()
+                val resultHref = linkElement.attr("href")
+
+                // --- VALIDASI KETAT (STRICT CHECK) ---
+                // Pastikan judul hasil pencarian MENGANDUNG Kode ID.
+                // Case insensitive (huruf besar/kecil dianggap sama)
+                if (resultTitle.contains(codeId, ignoreCase = true)) {
                     
-                    // Ambil Link Download (Cari tag <a> yang memiliki href .srt)
-                    // Kita hindari tombol "Translate", kita cari tombol "Download"
-                    val downloadLink = element.select("a[href$='.srt']").firstOrNull()?.attr("href")
+                    val detailPageUrl = if (resultHref.startsWith("http")) resultHref else "https://www.subtitlecat.com/$resultHref"
                     
-                    if (!downloadLink.isNullOrEmpty()) {
-                        val fullDownloadUrl = if (downloadLink.startsWith("http")) downloadLink else "https://www.subtitlecat.com$downloadLink"
-                        
-                        subtitleCallback.invoke(
-                            SubtitleFile(lang, fullDownloadUrl)
-                        )
+                    // Langkah 2: Masuk ke halaman detail untuk varian ini
+                    val detailDoc = app.get(detailPageUrl).document
+                    
+                    // Ambil nama varian dari judul hasil (misal: "JUR-613.ver1") untuk label
+                    // Kita potong string agar tidak kepanjangan di layar
+                    val shortVariantName = if (resultTitle.length > 20) resultTitle.take(20) + "..." else resultTitle
+
+                    detailDoc.select("div.sub-single").forEach { subBox ->
+                        val lang = subBox.select("span").getOrNull(1)?.text()?.trim() ?: "Unknown"
+                        val downloadLink = subBox.select("a[href$='.srt']").firstOrNull()?.attr("href")
+
+                        if (!downloadLink.isNullOrEmpty()) {
+                            val fullDownloadUrl = if (downloadLink.startsWith("http")) downloadLink else "https://www.subtitlecat.com$downloadLink"
+                            
+                            // Ekstrak nama file asli untuk label (opsional, biar user tahu ini file yg mana)
+                            val fileName = downloadLink.substringAfterLast("/").replace(".srt", "")
+                            
+                            // Format Label: "Indonesia [Nama File/Varian]"
+                            // Contoh: "Indonesian [JUR-613.ver1]"
+                            val label = "$lang [$fileName]"
+
+                            subtitleCallback.invoke(
+                                SubtitleFile(lang, fullDownloadUrl).apply {
+                                    // Kita override label agar muncul varian di pilihan player
+                                    // Catatan: Cloudstream mungkin menggunakan 'lang' sebagai label utama, 
+                                    // tapi url unik tetap akan membedakannya.
+                                }
+                            )
+                        }
                     }
+                    variantsFound++
                 }
             }
         } catch (e: Exception) {
