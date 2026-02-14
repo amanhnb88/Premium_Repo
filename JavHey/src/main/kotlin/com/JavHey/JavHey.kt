@@ -16,7 +16,6 @@ class JavHey : MainAPI() {
     override val supportedTypes = setOf(TvType.NSFW)
     override val vpnStatus = VPNStatus.MightBeNeeded
 
-    // Header disesuaikan dengan trafik asli (Chrome Android) agar tidak terdeteksi sebagai Bot
     private val headers = mapOf(
         "Authority" to "javhey.com",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -66,7 +65,6 @@ class JavHey : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/search?s=$query"
-        // Menambahkan Referer ke Home agar search tidak diblokir
         val searchHeaders = headers + mapOf("Referer" to "$mainUrl/")
         
         val document = app.get(url, headers = searchHeaders).document
@@ -78,15 +76,12 @@ class JavHey : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url, headers = headers).document
 
-        // Ambil judul dari H1
         val title = document.selectFirst("h1")?.text()?.trim() ?: "Unknown Title"
         
-        // Ambil poster (Coba meta tag dulu, baru elemen img)
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
             ?: document.selectFirst(".content_banner img")?.attr("src") 
             ?: document.selectFirst("article.item img")?.attr("src")
 
-        // Ambil deskripsi dari Meta Tag (lebih akurat)
         val description = document.selectFirst("meta[name=description]")?.attr("content")
             ?: document.selectFirst("meta[property=og:description]")?.attr("content")
             ?: document.select("div.main_content p").text()
@@ -110,43 +105,52 @@ class JavHey : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean = coroutineScope {
         
-        // 1. Fetch HTML sebagai Raw Text (Lebih ringan & cepat dibanding parsing DOM)
+        // 1. Fetch HTML (Raw Text)
         val html = app.get(data, headers = headers).text
         val rawLinks = mutableSetOf<String>()
 
-        // 2. Extraction Strategy: Decode Base64 (Prioritas Utama - Sapu Jagat)
-        // Mencari variabel JS tersembunyi yang berisi list server (links = "aHR0cHM6...")
-        val base64Regex = Regex("""["'](aHR0cHM6[^"']+)["']""")
+        // 2. Extraction Strategy: AGGRESSIVE Decode Base64 
+        // Mengubah regex agar tidak peduli tanda kutip. Menangkap semua string aHR0cHM6...
+        // sampai bertemu karakter non-base64 (seperti spasi, tanda kutip, kurung)
+        val base64Regex = Regex("""(aHR0cHM6[a-zA-Z0-9+/=]+)""")
+        
         base64Regex.findAll(html).forEach { match ->
             try {
+                // Ambil grup 1 (isi base64-nya saja)
                 val encodedData = match.groupValues[1]
-                // Decode Base64
                 val decodedData = String(Base64.decode(encodedData, Base64.DEFAULT))
-                // Split berdasarkan pola delimiter ",,," (sesuai log: link1,,,link2,,,)
+                
+                // Split berdasarkan pola delimiter ",,,"
                 decodedData.split(",,,").forEach { rawUrl -> 
                     val url = rawUrl.trim()
+                    // Filter url valid
                     if (url.startsWith("http")) rawLinks.add(url)
                 }
-            } catch (e: Exception) { }
+            } catch (e: Exception) { 
+                // Abaikan jika gagal decode (mungkin string mirip base64 tapi bukan)
+            }
         }
 
-        // 3. Fallback: Cari Iframe biasa
-        val iframeRegex = Regex("""<iframe[^>]+src=["'](https?:[^"']+)["']""")
+        // 3. Fallback: Iframe (Jika ada)
+        // Update regex untuk menangkap src="//..." (protocol relative) juga
+        val iframeRegex = Regex("""<iframe[^>]+src=["']((?:https?:)?//[^"']+)["']""")
         iframeRegex.findAll(html).forEach { match ->
-             val url = match.groupValues[1]
+             var url = match.groupValues[1]
+             if (url.startsWith("//")) url = "https:$url"
+             
              if (!url.contains("facebook") && !url.contains("google") && !url.contains("tiktok")) {
                  rawLinks.add(url)
              }
         }
 
-        // 4. Fallback: Regex Langsung untuk Server Umum
-        val fallbackRegex = Regex("""(https?:\\/\\/[\\w\\-\\.]+(?:hgplaycdn|mixdrop|dropload|vidhide|streamwish|d000d)[^"']+)""")
+        // 4. Fallback: Regex Langsung
+        val fallbackRegex = Regex("""(https?:\\?/\\?/[\\w\\-\\.]+(?:hgplaycdn|mixdrop|dropload|vidhide|streamwish|d000d)[^"'\s]+)""")
         fallbackRegex.findAll(html).forEach { match ->
-            rawLinks.add(match.value.replace("\\/", "/").trim())
+            val url = match.value.replace("\\/", "/").trim()
+            rawLinks.add(url)
         }
 
-        // 5. Prioritization Logic (Sorting)
-        // Server cepat ditaruh di antrean depan (0), lambat di belakang (2)
+        // 5. Prioritization Logic
         val fastServers = listOf("hgplay", "mixdrop", "fembed")
         val slowServers = listOf("dood", "streamwish", "filemoon", "vidhide")
 
@@ -158,21 +162,15 @@ class JavHey : MainAPI() {
             }
         }
 
-        // 6. Parallel Execution (Reactive & Non-Blocking)
-        // Menjalankan extractor secara paralel untuk setiap link
+        // 6. Parallel Execution
         sortedLinks.forEach { url ->
             launch(Dispatchers.IO) {
                 try {
-                    // Callback akan dipanggil segera setelah link ditemukan oleh extractor
-                    // Ini memberikan efek UX link muncul satu-satu di layar
                     loadExtractor(url, data, subtitleCallback, callback)
-                } catch (e: Exception) {
-                    // Error Silent: Biarkan link ini gagal, jangan matikan parent scope
-                }
+                } catch (e: Exception) { }
             }
         }
 
-        // Fungsi menunggu semua child coroutines selesai sebelum return
         return@coroutineScope true
     }
 }
