@@ -4,6 +4,9 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import android.util.Base64
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
 
 class JavHey : MainAPI() {
     override var mainUrl = "https://javhey.com"
@@ -13,6 +16,7 @@ class JavHey : MainAPI() {
     override val supportedTypes = setOf(TvType.NSFW)
     override val vpnStatus = VPNStatus.MightBeNeeded
 
+    // Header disesuaikan dengan trafik asli (Chrome Android) agar tidak terdeteksi sebagai Bot
     private val headers = mapOf(
         "Authority" to "javhey.com",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -62,6 +66,7 @@ class JavHey : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/search?s=$query"
+        // Menambahkan Referer ke Home agar search tidak diblokir
         val searchHeaders = headers + mapOf("Referer" to "$mainUrl/")
         
         val document = app.get(url, headers = searchHeaders).document
@@ -81,10 +86,7 @@ class JavHey : MainAPI() {
             ?: document.selectFirst(".content_banner img")?.attr("src") 
             ?: document.selectFirst("article.item img")?.attr("src")
 
-        // --- PERBAIKAN DESKRIPSI ---
-        // 1. Coba ambil dari Meta Description (biasanya paling bersih)
-        // 2. Coba ambil dari OpenGraph Description
-        // 3. Coba ambil dari elemen paragraf di konten
+        // Ambil deskripsi dari Meta Tag (lebih akurat)
         val description = document.selectFirst("meta[name=description]")?.attr("content")
             ?: document.selectFirst("meta[property=og:description]")?.attr("content")
             ?: document.select("div.main_content p").text()
@@ -106,43 +108,71 @@ class JavHey : MainAPI() {
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val document = app.get(data, headers = headers).document
-        val html = document.html()
-
-        val base64Regex = Regex("""["'](aHR0cHM6[^"']+)["']""")
+    ): Boolean = coroutineScope {
         
+        // 1. Fetch HTML sebagai Raw Text (Lebih ringan & cepat dibanding parsing DOM)
+        val html = app.get(data, headers = headers).text
+        val rawLinks = mutableSetOf<String>()
+
+        // 2. Extraction Strategy: Decode Base64 (Prioritas Utama - Sapu Jagat)
+        // Mencari variabel JS tersembunyi yang berisi list server (links = "aHR0cHM6...")
+        val base64Regex = Regex("""["'](aHR0cHM6[^"']+)["']""")
         base64Regex.findAll(html).forEach { match ->
             try {
                 val encodedData = match.groupValues[1]
+                // Decode Base64
                 val decodedData = String(Base64.decode(encodedData, Base64.DEFAULT))
-                val rawUrls = decodedData.split(",,,")
-                
-                rawUrls.forEach { rawUrl ->
+                // Split berdasarkan pola delimiter ",,," (sesuai log: link1,,,link2,,,)
+                decodedData.split(",,,").forEach { rawUrl -> 
                     val url = rawUrl.trim()
-                    if (url.startsWith("http")) {
-                        loadExtractor(url, data, subtitleCallback, callback)
-                    }
+                    if (url.startsWith("http")) rawLinks.add(url)
                 }
-            } catch (e: Exception) {
+            } catch (e: Exception) { }
+        }
+
+        // 3. Fallback: Cari Iframe biasa
+        val iframeRegex = Regex("""<iframe[^>]+src=["'](https?:[^"']+)["']""")
+        iframeRegex.findAll(html).forEach { match ->
+             val url = match.groupValues[1]
+             if (!url.contains("facebook") && !url.contains("google") && !url.contains("tiktok")) {
+                 rawLinks.add(url)
+             }
+        }
+
+        // 4. Fallback: Regex Langsung untuk Server Umum
+        val fallbackRegex = Regex("""(https?:\\/\\/[\\w\\-\\.]+(?:hgplaycdn|mixdrop|dropload|vidhide|streamwish|d000d)[^"']+)""")
+        fallbackRegex.findAll(html).forEach { match ->
+            rawLinks.add(match.value.replace("\\/", "/").trim())
+        }
+
+        // 5. Prioritization Logic (Sorting)
+        // Server cepat ditaruh di antrean depan (0), lambat di belakang (2)
+        val fastServers = listOf("hgplay", "mixdrop", "fembed")
+        val slowServers = listOf("dood", "streamwish", "filemoon", "vidhide")
+
+        val sortedLinks = rawLinks.sortedBy { url ->
+            when {
+                fastServers.any { url.contains(it) } -> 0 // Fastest
+                slowServers.any { url.contains(it) } -> 2 // Slowest
+                else -> 1 // Medium
             }
         }
 
-        document.select("iframe").forEach { iframe ->
-            var src = iframe.attr("src")
-            if (src.startsWith("//")) src = "https:$src"
-            if (src.isNotBlank() && !src.contains("facebook") && !src.contains("google") && !src.contains("tiktok")) {
-                loadExtractor(src, data, subtitleCallback, callback)
+        // 6. Parallel Execution (Reactive & Non-Blocking)
+        // Menjalankan extractor secara paralel untuk setiap link
+        sortedLinks.forEach { url ->
+            launch(Dispatchers.IO) {
+                try {
+                    // Callback akan dipanggil segera setelah link ditemukan oleh extractor
+                    // Ini memberikan efek UX link muncul satu-satu di layar
+                    loadExtractor(url, data, subtitleCallback, callback)
+                } catch (e: Exception) {
+                    // Error Silent: Biarkan link ini gagal, jangan matikan parent scope
+                }
             }
         }
 
-        Regex("""(https?:\\/\\/[\\w\\-\\.]+(?:hgplaycdn|mixdrop|dropload|vidhide|streamwish|d000d)[^"']+)""")
-            .findAll(html)
-            .forEach { match ->
-                val url = match.value.replace("\\/", "/")
-                loadExtractor(url, data, subtitleCallback, callback)
-            }
-
-        return true
+        // Fungsi menunggu semua child coroutines selesai sebelum return
+        return@coroutineScope true
     }
 }
