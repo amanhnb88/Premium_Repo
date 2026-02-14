@@ -108,23 +108,22 @@ class JavHey : MainAPI() {
         val html = app.get(data, headers = headers).text
         val rawLinks = mutableSetOf<String>()
 
-        // STRATEGI 1: Cari tag INPUT dengan id="links" (Urutan atribut tidak masalah)
-        // Regex ini mencari tag <input ...> yang mengandung id="links" DAN value="..." di dalamnya
+        // 1. Teknik ID="links" (Paling Akurat)
+        // Menangkap <input ... id="links" ... value="...">
         val preciseInputRegex = Regex("""<input(?=[^>]*id=["']links["'])(?=[^>]*value=["']([^"']+)["'])[^>]*>""")
         
-        // STRATEGI 2: Base64 Agresif (Backup)
-        // Menangkap string aHR0cHM6... sampai karakter tidak valid
+        // 2. Teknik Agresif (Cadangan)
         val aggressiveRegex = Regex("""(aHR0cHM6[a-zA-Z0-9+/=]+)""")
 
         val allMatches = preciseInputRegex.findAll(html) + aggressiveRegex.findAll(html)
 
         allMatches.forEach { match ->
             try {
-                // Ambil grup capturing pertama (isinya string base64)
+                // Ambil data base64 (group 1)
                 val encodedData = match.groupValues[1]
                 val decodedData = String(Base64.decode(encodedData, Base64.DEFAULT))
                 
-                // Split berdasarkan ",,,"
+                // Split delimiter ",,,"
                 decodedData.split(",,,").forEach { rawUrl -> 
                     val url = rawUrl.trim()
                     if (url.startsWith("http")) {
@@ -134,47 +133,40 @@ class JavHey : MainAPI() {
             } catch (e: Exception) { }
         }
 
-        // STRATEGI 3: Iframe Manual (Untuk video tanpa base64)
+        // 3. Fallback Iframe Manual
         val iframeRegex = Regex("""<iframe[^>]+src=["']((?:https?:)?//[^"']+)["']""")
         iframeRegex.findAll(html).forEach { match ->
              var url = match.groupValues[1]
              if (url.startsWith("//")) url = "https:$url"
-             if (!url.contains("facebook") && !url.contains("google") && !url.contains("tiktok")) {
+             if (!url.contains("facebook") && !url.contains("google")) {
                  rawLinks.add(url)
              }
         }
 
-        // STRATEGI 4: Regex Langsung (Fallback terakhir)
-        val fallbackRegex = Regex("""(https?:\\?/\\?/[\\w\\-\\.]+(?:hgplaycdn|mixdrop|dropload|vidhide|streamwish|d000d|bysebuho|minochinos)[^"'\s]+)""")
-        fallbackRegex.findAll(html).forEach { match ->
-            val url = match.value.replace("\\/", "/").trim()
-            rawLinks.add(url)
-        }
-
-        // --- Prioritas Server ---
-        val fastServers = listOf("hgplay", "mixdrop", "fembed", "bysebuho")
-        val slowServers = listOf("dood", "streamwish", "filemoon", "vidhide")
-
+        // 4. Proses Link (Dengan Domain Mapping)
         val sortedLinks = rawLinks.sortedBy { url ->
-            when {
-                fastServers.any { url.contains(it) } -> 0
-                slowServers.any { url.contains(it) } -> 2
-                else -> 1
-            }
+            if (url.contains("hgplay") || url.contains("mixdrop")) 0 else 1
         }
 
-        // --- Eksekusi Paralel ---
         sortedLinks.forEach { url ->
             launch(Dispatchers.IO) {
                 try {
-                    // Coba load normal
-                    val loaded = loadExtractor(url, data, subtitleCallback, callback)
+                    // Coba load normal dulu
+                    var loaded = loadExtractor(url, data, subtitleCallback, callback)
                     
-                    // Fallback khusus untuk domain kloningan yang mungkin belum dikenali ExtractorApi utama
+                    // Jika gagal, coba teknik Domain Mapping
+                    // Banyak situs JAV pakai domain aneh yang sebenarnya adalah StreamWish/Fembed
                     if (!loaded) {
-                        if (url.contains("minochinos")) {
-                            // Minochinos biasanya mirip StreamWish/FileMoon, coba load sebagai generic
-                            // Atau biarkan loadExtractor menghandle redirect
+                        val fixedUrl = when {
+                            url.contains("minochinos.com") -> url.replace("minochinos.com", "streamwish.to")
+                            url.contains("bysebuho.com") -> url.replace("bysebuho.com", "streamwish.to") 
+                            url.contains("terbit2.com") -> url.replace("terbit2.com", "streamwish.to")
+                            url.contains("turtle4up.top") -> url.replace("turtle4up.top", "streamwish.to")
+                            else -> null
+                        }
+                        
+                        if (fixedUrl != null) {
+                            loadExtractor(fixedUrl, data, subtitleCallback, callback)
                         }
                     }
                 } catch (e: Exception) { }
