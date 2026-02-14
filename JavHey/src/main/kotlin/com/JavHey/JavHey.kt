@@ -1,4 +1,4 @@
-package com.lagradost.cloudstream3.providers
+package com.javhey
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -63,7 +63,6 @@ class JavHey : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/search?s=$query"
-        // Wajib pakai Referer Home saat search agar tidak 403 Forbidden
         val searchHeaders = headers + mapOf("Referer" to "$mainUrl/")
         
         val document = app.get(url, headers = searchHeaders).document
@@ -77,7 +76,6 @@ class JavHey : MainAPI() {
 
         val title = document.selectFirst("h1")?.text()?.trim() ?: "Unknown Title"
         
-        // Mengambil poster dari berbagai kemungkinan tempat
         val poster = document.selectFirst(".content_banner img")?.attr("src") 
             ?: document.selectFirst("article.item img")?.attr("src")
             ?: document.selectFirst("meta[property=og:image]")?.attr("content")
@@ -104,43 +102,32 @@ class JavHey : MainAPI() {
         val document = app.get(data, headers = headers).document
         val html = document.html()
 
-        // --- TEKNIK UTAMA: DECODE BASE64 ---
-        // Mencari variabel tersembunyi yang berisi semua link server (HgPlay, MixDrop, dll)
-        // Pola: string yang dimulai dengan "aHR0cHM6" (https:)
         val base64Regex = Regex("""["'](aHR0cHM6[^"']+)["']""")
         
         base64Regex.findAll(html).forEach { match ->
             try {
                 val encodedData = match.groupValues[1]
-                // Decode dari Base64 ke Text biasa
                 val decodedData = String(Base64.decode(encodedData, Base64.DEFAULT))
-                
-                // Server dipisahkan oleh tanda koma tiga kali ",,,"
                 val rawUrls = decodedData.split(",,,")
                 
                 rawUrls.forEach { rawUrl ->
                     val url = rawUrl.trim()
-                    // Hanya ambil link video (http), abaikan jika ada script aneh
                     if (url.startsWith("http")) {
                         loadExtractor(url, data, subtitleCallback, callback)
                     }
                 }
             } catch (e: Exception) {
-                // Lanjut jika decode gagal
             }
         }
 
-        // --- TEKNIK CADANGAN 1: IFRAME ---
         document.select("iframe").forEach { iframe ->
             var src = iframe.attr("src")
             if (src.startsWith("//")) src = "https:$src"
-            // Filter link sampah iklan
             if (src.isNotBlank() && !src.contains("facebook") && !src.contains("google") && !src.contains("tiktok")) {
                 loadExtractor(src, data, subtitleCallback, callback)
             }
         }
 
-        // --- TEKNIK CADANGAN 2: REGEX MANUAL ---
         Regex("""(https?:\\/\\/[\\w\\-\\.]+(?:hgplaycdn|mixdrop|dropload|vidhide|streamwish|d000d)[^"']+)""")
             .findAll(html)
             .forEach { match ->
