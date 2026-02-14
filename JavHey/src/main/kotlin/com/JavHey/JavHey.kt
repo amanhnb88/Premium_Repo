@@ -16,7 +16,6 @@ class JavHey : MainAPI() {
     override val supportedTypes = setOf(TvType.NSFW)
     override val vpnStatus = VPNStatus.MightBeNeeded
 
-    // Header disesuaikan dengan trafik asli (Chrome Android) agar tidak terdeteksi sebagai Bot
     private val headers = mapOf(
         "Authority" to "javhey.com",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -83,7 +82,6 @@ class JavHey : MainAPI() {
             ?: document.selectFirst(".content_banner img")?.attr("src") 
             ?: document.selectFirst("article.item img")?.attr("src")
 
-        // Mengambil deskripsi dari Meta Tag
         val description = document.selectFirst("meta[name=description]")?.attr("content")
             ?: document.selectFirst("meta[property=og:description]")?.attr("content")
             ?: document.select("div.main_content p").text()
@@ -110,70 +108,75 @@ class JavHey : MainAPI() {
         val html = app.get(data, headers = headers).text
         val rawLinks = mutableSetOf<String>()
 
-        // 1. TEKNIK PRESISI (Berdasarkan Temuan Termux)
-        // Mencari elemen dengan id="links" dan mengambil value-nya
-        // Contoh: id="links" value="aHR0cHM6..."
-        val specificRegex = Regex("""id=["']links["']\s+value=["']([^"']+)["']""")
+        // STRATEGI 1: Cari tag INPUT dengan id="links" (Urutan atribut tidak masalah)
+        // Regex ini mencari tag <input ...> yang mengandung id="links" DAN value="..." di dalamnya
+        val preciseInputRegex = Regex("""<input(?=[^>]*id=["']links["'])(?=[^>]*value=["']([^"']+)["'])[^>]*>""")
         
-        // 2. TEKNIK AGRESIF (Cadangan Sapu Jagat)
-        // Menangkap string aHR0cHM6... dimanapun dia berada
+        // STRATEGI 2: Base64 Agresif (Backup)
+        // Menangkap string aHR0cHM6... sampai karakter tidak valid
         val aggressiveRegex = Regex("""(aHR0cHM6[a-zA-Z0-9+/=]+)""")
 
-        // Gabungkan hasil pencarian dari kedua metode
-        val matches = (specificRegex.findAll(html) + aggressiveRegex.findAll(html))
-        
-        matches.forEach { match ->
+        val allMatches = preciseInputRegex.findAll(html) + aggressiveRegex.findAll(html)
+
+        allMatches.forEach { match ->
             try {
-                // Ambil grup yang berisi string base64
-                // match.groupValues[1] untuk specificRegex, dan juga untuk aggressiveRegex
+                // Ambil grup capturing pertama (isinya string base64)
                 val encodedData = match.groupValues[1]
-                
-                // Decode Base64
                 val decodedData = String(Base64.decode(encodedData, Base64.DEFAULT))
                 
                 // Split berdasarkan ",,,"
                 decodedData.split(",,,").forEach { rawUrl -> 
                     val url = rawUrl.trim()
-                    if (url.startsWith("http")) rawLinks.add(url)
+                    if (url.startsWith("http")) {
+                        rawLinks.add(url)
+                    }
                 }
             } catch (e: Exception) { }
         }
 
-        // 3. Fallback: Iframe (Jika ada link manual non-base64)
+        // STRATEGI 3: Iframe Manual (Untuk video tanpa base64)
         val iframeRegex = Regex("""<iframe[^>]+src=["']((?:https?:)?//[^"']+)["']""")
         iframeRegex.findAll(html).forEach { match ->
              var url = match.groupValues[1]
              if (url.startsWith("//")) url = "https:$url"
-             
              if (!url.contains("facebook") && !url.contains("google") && !url.contains("tiktok")) {
                  rawLinks.add(url)
              }
         }
 
-        // 4. Fallback: Regex Langsung
-        val fallbackRegex = Regex("""(https?:\\?/\\?/[\\w\\-\\.]+(?:hgplaycdn|mixdrop|dropload|vidhide|streamwish|d000d)[^"'\s]+)""")
+        // STRATEGI 4: Regex Langsung (Fallback terakhir)
+        val fallbackRegex = Regex("""(https?:\\?/\\?/[\\w\\-\\.]+(?:hgplaycdn|mixdrop|dropload|vidhide|streamwish|d000d|bysebuho|minochinos)[^"'\s]+)""")
         fallbackRegex.findAll(html).forEach { match ->
             val url = match.value.replace("\\/", "/").trim()
             rawLinks.add(url)
         }
 
-        // 5. Prioritization Logic
-        val fastServers = listOf("hgplay", "mixdrop", "fembed")
+        // --- Prioritas Server ---
+        val fastServers = listOf("hgplay", "mixdrop", "fembed", "bysebuho")
         val slowServers = listOf("dood", "streamwish", "filemoon", "vidhide")
 
         val sortedLinks = rawLinks.sortedBy { url ->
             when {
-                fastServers.any { url.contains(it) } -> 0 // Fastest
-                slowServers.any { url.contains(it) } -> 2 // Slowest
-                else -> 1 // Medium
+                fastServers.any { url.contains(it) } -> 0
+                slowServers.any { url.contains(it) } -> 2
+                else -> 1
             }
         }
 
-        // 6. Parallel Execution
+        // --- Eksekusi Paralel ---
         sortedLinks.forEach { url ->
             launch(Dispatchers.IO) {
                 try {
-                    loadExtractor(url, data, subtitleCallback, callback)
+                    // Coba load normal
+                    val loaded = loadExtractor(url, data, subtitleCallback, callback)
+                    
+                    // Fallback khusus untuk domain kloningan yang mungkin belum dikenali ExtractorApi utama
+                    if (!loaded) {
+                        if (url.contains("minochinos")) {
+                            // Minochinos biasanya mirip StreamWish/FileMoon, coba load sebagai generic
+                            // Atau biarkan loadExtractor menghandle redirect
+                        }
+                    }
                 } catch (e: Exception) { }
             }
         }
