@@ -16,6 +16,7 @@ class JavHey : MainAPI() {
     override val supportedTypes = setOf(TvType.NSFW)
     override val vpnStatus = VPNStatus.MightBeNeeded
 
+    // Header disesuaikan dengan trafik asli (Chrome Android) agar tidak terdeteksi sebagai Bot
     private val headers = mapOf(
         "Authority" to "javhey.com",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -82,6 +83,7 @@ class JavHey : MainAPI() {
             ?: document.selectFirst(".content_banner img")?.attr("src") 
             ?: document.selectFirst("article.item img")?.attr("src")
 
+        // Mengambil deskripsi dari Meta Tag
         val description = document.selectFirst("meta[name=description]")?.attr("content")
             ?: document.selectFirst("meta[property=og:description]")?.attr("content")
             ?: document.select("div.main_content p").text()
@@ -105,34 +107,39 @@ class JavHey : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean = coroutineScope {
         
-        // 1. Fetch HTML (Raw Text)
         val html = app.get(data, headers = headers).text
         val rawLinks = mutableSetOf<String>()
 
-        // 2. Extraction Strategy: AGGRESSIVE Decode Base64 
-        // Mengubah regex agar tidak peduli tanda kutip. Menangkap semua string aHR0cHM6...
-        // sampai bertemu karakter non-base64 (seperti spasi, tanda kutip, kurung)
-        val base64Regex = Regex("""(aHR0cHM6[a-zA-Z0-9+/=]+)""")
+        // 1. TEKNIK PRESISI (Berdasarkan Temuan Termux)
+        // Mencari elemen dengan id="links" dan mengambil value-nya
+        // Contoh: id="links" value="aHR0cHM6..."
+        val specificRegex = Regex("""id=["']links["']\s+value=["']([^"']+)["']""")
         
-        base64Regex.findAll(html).forEach { match ->
+        // 2. TEKNIK AGRESIF (Cadangan Sapu Jagat)
+        // Menangkap string aHR0cHM6... dimanapun dia berada
+        val aggressiveRegex = Regex("""(aHR0cHM6[a-zA-Z0-9+/=]+)""")
+
+        // Gabungkan hasil pencarian dari kedua metode
+        val matches = (specificRegex.findAll(html) + aggressiveRegex.findAll(html))
+        
+        matches.forEach { match ->
             try {
-                // Ambil grup 1 (isi base64-nya saja)
+                // Ambil grup yang berisi string base64
+                // match.groupValues[1] untuk specificRegex, dan juga untuk aggressiveRegex
                 val encodedData = match.groupValues[1]
+                
+                // Decode Base64
                 val decodedData = String(Base64.decode(encodedData, Base64.DEFAULT))
                 
-                // Split berdasarkan pola delimiter ",,,"
+                // Split berdasarkan ",,,"
                 decodedData.split(",,,").forEach { rawUrl -> 
                     val url = rawUrl.trim()
-                    // Filter url valid
                     if (url.startsWith("http")) rawLinks.add(url)
                 }
-            } catch (e: Exception) { 
-                // Abaikan jika gagal decode (mungkin string mirip base64 tapi bukan)
-            }
+            } catch (e: Exception) { }
         }
 
-        // 3. Fallback: Iframe (Jika ada)
-        // Update regex untuk menangkap src="//..." (protocol relative) juga
+        // 3. Fallback: Iframe (Jika ada link manual non-base64)
         val iframeRegex = Regex("""<iframe[^>]+src=["']((?:https?:)?//[^"']+)["']""")
         iframeRegex.findAll(html).forEach { match ->
              var url = match.groupValues[1]
