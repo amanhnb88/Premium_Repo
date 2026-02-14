@@ -13,7 +13,6 @@ class JavHey : MainAPI() {
     override val supportedTypes = setOf(TvType.NSFW)
     override val vpnStatus = VPNStatus.MightBeNeeded
 
-    // Header disesuaikan dengan trafik asli (Chrome Android) agar tidak terdeteksi sebagai Bot
     private val headers = mapOf(
         "Authority" to "javhey.com",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -74,13 +73,22 @@ class JavHey : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url, headers = headers).document
 
+        // Ambil judul dari H1
         val title = document.selectFirst("h1")?.text()?.trim() ?: "Unknown Title"
         
-        val poster = document.selectFirst(".content_banner img")?.attr("src") 
+        // Ambil poster (Coba meta tag dulu, baru elemen img)
+        val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
+            ?: document.selectFirst(".content_banner img")?.attr("src") 
             ?: document.selectFirst("article.item img")?.attr("src")
-            ?: document.selectFirst("meta[property=og:image]")?.attr("content")
 
-        val description = document.select("div.video-info p, div.entry-content p, div.description").text()
+        // --- PERBAIKAN DESKRIPSI ---
+        // 1. Coba ambil dari Meta Description (biasanya paling bersih)
+        // 2. Coba ambil dari OpenGraph Description
+        // 3. Coba ambil dari elemen paragraf di konten
+        val description = document.selectFirst("meta[name=description]")?.attr("content")
+            ?: document.selectFirst("meta[property=og:description]")?.attr("content")
+            ?: document.select("div.main_content p").text()
+            ?: "No Description"
 
         val recommendations = document.select("div.article_standard_view > article.item").mapNotNull {
             toSearchResult(it)
