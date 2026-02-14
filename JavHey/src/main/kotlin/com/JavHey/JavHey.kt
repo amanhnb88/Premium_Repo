@@ -8,7 +8,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 
-class JavHey : MainAPI() {
+// Class Name diganti V2 untuk mengatasi masalah Checksum/Cache
+class JavHeyV2 : MainAPI() {
     override var mainUrl = "https://javhey.com"
     override var name = "JAVHEY"
     override val hasMainPage = true
@@ -16,6 +17,7 @@ class JavHey : MainAPI() {
     override val supportedTypes = setOf(TvType.NSFW)
     override val vpnStatus = VPNStatus.MightBeNeeded
 
+    // Header spesifik untuk menghindari deteksi bot
     private val headers = mapOf(
         "Authority" to "javhey.com",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -66,7 +68,6 @@ class JavHey : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/search?s=$query"
         val searchHeaders = headers + mapOf("Referer" to "$mainUrl/")
-        
         val document = app.get(url, headers = searchHeaders).document
         return document.select("div.article_standard_view > article.item").mapNotNull {
             toSearchResult(it)
@@ -108,22 +109,21 @@ class JavHey : MainAPI() {
         val html = app.get(data, headers = headers).text
         val rawLinks = mutableSetOf<String>()
 
-        // 1. Teknik ID="links" (Paling Akurat)
-        // Menangkap <input ... id="links" ... value="...">
+        // 1. STRATEGI UTAMA: Cari elemen <input id="links" value="...">
+        // Ini metode paling akurat berdasarkan hasil Termux
         val preciseInputRegex = Regex("""<input(?=[^>]*id=["']links["'])(?=[^>]*value=["']([^"']+)["'])[^>]*>""")
         
-        // 2. Teknik Agresif (Cadangan)
+        // 2. STRATEGI CADANGAN: Cari string Base64 secara agresif
         val aggressiveRegex = Regex("""(aHR0cHM6[a-zA-Z0-9+/=]+)""")
 
         val allMatches = preciseInputRegex.findAll(html) + aggressiveRegex.findAll(html)
 
         allMatches.forEach { match ->
             try {
-                // Ambil data base64 (group 1)
                 val encodedData = match.groupValues[1]
                 val decodedData = String(Base64.decode(encodedData, Base64.DEFAULT))
                 
-                // Split delimiter ",,,"
+                // Data dipisahkan oleh ",,,"
                 decodedData.split(",,,").forEach { rawUrl -> 
                     val url = rawUrl.trim()
                     if (url.startsWith("http")) {
@@ -133,35 +133,45 @@ class JavHey : MainAPI() {
             } catch (e: Exception) { }
         }
 
-        // 3. Fallback Iframe Manual
+        // 3. Fallback: Iframe
         val iframeRegex = Regex("""<iframe[^>]+src=["']((?:https?:)?//[^"']+)["']""")
         iframeRegex.findAll(html).forEach { match ->
              var url = match.groupValues[1]
              if (url.startsWith("//")) url = "https:$url"
-             if (!url.contains("facebook") && !url.contains("google")) {
+             if (!url.contains("facebook") && !url.contains("google") && !url.contains("tiktok")) {
                  rawLinks.add(url)
              }
         }
 
-        // 4. Proses Link (Dengan Domain Mapping)
+        // 4. Prioritization
+        val fastServers = listOf("hgplay", "mixdrop", "fembed", "byse")
+        val slowServers = listOf("dood", "streamwish", "filemoon", "vidhide")
+
         val sortedLinks = rawLinks.sortedBy { url ->
-            if (url.contains("hgplay") || url.contains("mixdrop")) 0 else 1
+            when {
+                fastServers.any { url.contains(it) } -> 0
+                slowServers.any { url.contains(it) } -> 2
+                else -> 1
+            }
         }
 
+        // 5. Eksekusi Paralel & Domain Fixer
         sortedLinks.forEach { url ->
             launch(Dispatchers.IO) {
                 try {
-                    // Coba load normal dulu
+                    // Coba load normal terlebih dahulu
+                    // Ini akan sukses untuk HgPlay, MixDrop, dan ByseBuho (jika Extractor ByseSX sudah didaftarkan)
                     var loaded = loadExtractor(url, data, subtitleCallback, callback)
                     
-                    // Jika gagal, coba teknik Domain Mapping
-                    // Banyak situs JAV pakai domain aneh yang sebenarnya adalah StreamWish/Fembed
+                    // Jika gagal, cek apakah ini domain kloningan yang perlu di-fix manual
                     if (!loaded) {
                         val fixedUrl = when {
+                            // Domain-domain ini struktur halamannya mirip StreamWish/Fembed
+                            // Kita paksa ubah domainnya agar dikenali oleh Extractor bawaan CloudStream
                             url.contains("minochinos.com") -> url.replace("minochinos.com", "streamwish.to")
-                            url.contains("bysebuho.com") -> url.replace("bysebuho.com", "streamwish.to") 
                             url.contains("terbit2.com") -> url.replace("terbit2.com", "streamwish.to")
                             url.contains("turtle4up.top") -> url.replace("turtle4up.top", "streamwish.to")
+                            // Note: bysebuho.com TIDAK diubah karena kamu sudah punya extractor khususnya
                             else -> null
                         }
                         
