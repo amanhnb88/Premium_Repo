@@ -13,6 +13,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
+// Server tambahan biar makin banyak pilihan nontonnya
 class Sunrong : FilemoonV2() {
     override var mainUrl = "https://sunrong.my.id"
     override var name = "Sunrong"
@@ -28,6 +29,7 @@ class Streamhide : Filesim() {
     override var mainUrl: String = "https://streamhide.to"
 }
 
+// Ini buat handle server Linkbox, agak tricky emang tapi udah aman
 open class Lbx : ExtractorApi() {
     override val name = "Linkbox"
     override val mainUrl = "https://lbx.to"
@@ -40,10 +42,15 @@ open class Lbx : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        // Ambil tokennya dulu dari URL, pake regex biar presisi
         val token = Regex("""(?:/f/|/file/|\?id=)(\w+)""").find(url)?.groupValues?.get(1)
+        
+        // Minta ID file aslinya ke API Linkbox
         val id =
             app.get("$realUrl/api/file/share_out_list/?sortField=utime&sortAsc=0&pageNo=1&pageSize=50&shareToken=$token")
                 .parsedSafe<Responses>()?.data?.itemId
+        
+        // Kalau udah dapet ID, langsung minta detail resolusinya
         app.get("$realUrl/api/file/detail?itemId=$id", referer = url)
             .parsedSafe<Responses>()?.data?.itemInfo?.resolutionList?.map { link ->
                 callback.invoke(
@@ -80,6 +87,8 @@ open class Lbx : ExtractorApi() {
 
 }
 
+// Nah ini dia primadonanya, Kuramadrive.
+// Aku bikin khusus biar bisa bypass limit Google Drive.
 open class Kuramadrive : ExtractorApi() {
     override val name = "Kuramadrive"
     override val mainUrl = "https://v8.kuramanime.blog"
@@ -91,12 +100,12 @@ open class Kuramadrive : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // URL format internal kita: https://v8.kuramanime.blog/kuramadrive?pid=123&sid=456
+        // Ini URL rahasia bikinan kita sendiri, isinya PID dan SID buat nuker token
         val pid = Regex("pid=(\\d+)").find(url)?.groupValues?.get(1) ?: return
         val sid = Regex("sid=(\\d+)").find(url)?.groupValues?.get(1) ?: return
 
         try {
-            // Request Token Google Drive (Sesuai log user)
+            // Tembak API internal webnya buat minta 'Surat Jalan' (Access Token)
             val json = app.post(
                 "$mainUrl/misc/token/drive-token",
                 headers = mapOf(
@@ -108,10 +117,11 @@ open class Kuramadrive : ExtractorApi() {
                 data = mapOf("pid" to pid, "sid" to sid)
             ).parsedSafe<DriveTokenResponse>()
 
+            // Kalo sukses, kita dapet token resmi dari Google
             val accessToken = json?.accessToken ?: return
-            val gid = json.gid ?: return // Google Drive File ID
+            val gid = json.gid ?: return
 
-            // Construct Direct Google API Link
+            // Langsung akses ke server Google biar ngebut no buffering
             val driveUrl = "https://www.googleapis.com/drive/v3/files/$gid?alt=media"
 
             callback.invoke(
@@ -121,7 +131,7 @@ open class Kuramadrive : ExtractorApi() {
                     driveUrl,
                     INFER_TYPE
                 ) {
-                    // Masukkan Access Token ke Header
+                    // Masukin token saktinya di header biar dibolehin masuk sama Google
                     this.headers = mapOf(
                         "Authorization" to "Bearer $accessToken"
                     )
