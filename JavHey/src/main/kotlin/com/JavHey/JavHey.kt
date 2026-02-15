@@ -8,8 +8,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 
-// Class Name diganti V2 untuk mengatasi masalah Checksum/Cache
-class JavHeyV2 : MainAPI() {
+// GANTI NAMA CLASS JADI 'JavHeyFinal' UNTUK MENGHAPUS CACHE ERROR CHECKSUM
+class JavHeyFinal : MainAPI() {
     override var mainUrl = "https://javhey.com"
     override var name = "JAVHEY"
     override val hasMainPage = true
@@ -17,7 +17,6 @@ class JavHeyV2 : MainAPI() {
     override val supportedTypes = setOf(TvType.NSFW)
     override val vpnStatus = VPNStatus.MightBeNeeded
 
-    // Header spesifik untuk menghindari deteksi bot
     private val headers = mapOf(
         "Authority" to "javhey.com",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -76,22 +75,17 @@ class JavHeyV2 : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url, headers = headers).document
-
         val title = document.selectFirst("h1")?.text()?.trim() ?: "Unknown Title"
-        
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
             ?: document.selectFirst(".content_banner img")?.attr("src") 
             ?: document.selectFirst("article.item img")?.attr("src")
-
         val description = document.selectFirst("meta[name=description]")?.attr("content")
             ?: document.selectFirst("meta[property=og:description]")?.attr("content")
             ?: document.select("div.main_content p").text()
             ?: "No Description"
-
         val recommendations = document.select("div.article_standard_view > article.item").mapNotNull {
             toSearchResult(it)
         }
-
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster
             this.plot = description
@@ -109,11 +103,9 @@ class JavHeyV2 : MainAPI() {
         val html = app.get(data, headers = headers).text
         val rawLinks = mutableSetOf<String>()
 
-        // 1. STRATEGI UTAMA: Cari elemen <input id="links" value="...">
-        // Ini metode paling akurat berdasarkan hasil Termux
-        val preciseInputRegex = Regex("""<input(?=[^>]*id=["']links["'])(?=[^>]*value=["']([^"']+)["'])[^>]*>""")
-        
-        // 2. STRATEGI CADANGAN: Cari string Base64 secara agresif
+        // 1. Teknik ID="links" (Paling Akurat sesuai Termux)
+        val preciseInputRegex = Regex("""id=["']links["'][^>]*value=["']([^"']+)["']""")
+        // 2. Teknik Agresif (Cadangan)
         val aggressiveRegex = Regex("""(aHR0cHM6[a-zA-Z0-9+/=]+)""")
 
         val allMatches = preciseInputRegex.findAll(html) + aggressiveRegex.findAll(html)
@@ -123,7 +115,7 @@ class JavHeyV2 : MainAPI() {
                 val encodedData = match.groupValues[1]
                 val decodedData = String(Base64.decode(encodedData, Base64.DEFAULT))
                 
-                // Data dipisahkan oleh ",,,"
+                // Split berdasarkan ",,,"
                 decodedData.split(",,,").forEach { rawUrl -> 
                     val url = rawUrl.trim()
                     if (url.startsWith("http")) {
@@ -133,7 +125,7 @@ class JavHeyV2 : MainAPI() {
             } catch (e: Exception) { }
         }
 
-        // 3. Fallback: Iframe
+        // 3. Fallback Iframe
         val iframeRegex = Regex("""<iframe[^>]+src=["']((?:https?:)?//[^"']+)["']""")
         iframeRegex.findAll(html).forEach { match ->
              var url = match.groupValues[1]
@@ -143,42 +135,27 @@ class JavHeyV2 : MainAPI() {
              }
         }
 
-        // 4. Prioritization
-        val fastServers = listOf("hgplay", "mixdrop", "fembed", "byse")
-        val slowServers = listOf("dood", "streamwish", "filemoon", "vidhide")
-
-        val sortedLinks = rawLinks.sortedBy { url ->
-            when {
-                fastServers.any { url.contains(it) } -> 0
-                slowServers.any { url.contains(it) } -> 2
-                else -> 1
-            }
-        }
-
-        // 5. Eksekusi Paralel & Domain Fixer
-        sortedLinks.forEach { url ->
+        // 4. Proses Link dengan OPLAS DOMAIN (Domain Mapping)
+        rawLinks.forEach { url ->
             launch(Dispatchers.IO) {
                 try {
-                    // Coba load normal terlebih dahulu
-                    // Ini akan sukses untuk HgPlay, MixDrop, dan ByseBuho (jika Extractor ByseSX sudah didaftarkan)
-                    var loaded = loadExtractor(url, data, subtitleCallback, callback)
+                    // Cek apakah link ini perlu "dioplas" agar dikenali CloudStream
+                    var fixedUrl = url
                     
-                    // Jika gagal, cek apakah ini domain kloningan yang perlu di-fix manual
-                    if (!loaded) {
-                        val fixedUrl = when {
-                            // Domain-domain ini struktur halamannya mirip StreamWish/Fembed
-                            // Kita paksa ubah domainnya agar dikenali oleh Extractor bawaan CloudStream
-                            url.contains("minochinos.com") -> url.replace("minochinos.com", "streamwish.to")
-                            url.contains("terbit2.com") -> url.replace("terbit2.com", "streamwish.to")
-                            url.contains("turtle4up.top") -> url.replace("turtle4up.top", "streamwish.to")
-                            // Note: bysebuho.com TIDAK diubah karena kamu sudah punya extractor khususnya
-                            else -> null
-                        }
-                        
-                        if (fixedUrl != null) {
-                            loadExtractor(fixedUrl, data, subtitleCallback, callback)
-                        }
-                    }
+                    if (url.contains("minochinos.com")) {
+                        fixedUrl = url.replace("minochinos.com", "streamwish.to")
+                    } else if (url.contains("terbit2.com")) {
+                        fixedUrl = url.replace("terbit2.com", "streamwish.to")
+                    } else if (url.contains("turtle4up.top")) {
+                        // Turtle4up biasanya formatnya /#hash, kita ubah jadi streamwish /e/hash
+                        val hash = url.substringAfter("#")
+                        fixedUrl = "https://streamwish.to/e/$hash"
+                    } 
+                    // Bysebuho kita biarkan karena kamu punya ByseSX.kt
+
+                    // Load Extractor
+                    loadExtractor(fixedUrl, data, subtitleCallback, callback)
+
                 } catch (e: Exception) { }
             }
         }
