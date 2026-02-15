@@ -1,13 +1,13 @@
 package com.javhey
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
+import com.lagradost.cloudstream3.plugins.Plugin // <--- PENTING: Ini class induknya
 import android.content.Context
 
 @CloudstreamPlugin
-class JavHeyPlugin : CloudstreamPlugin() {
+class JavHeyPlugin : Plugin() { // <--- PENTING: Extend 'Plugin', BUKAN 'CloudstreamPlugin'
     override fun load(context: Context) {
-        // Kita hanya perlu mendaftarkan MainAPI saja.
-        // Ekstraktor Byse sudah dipanggil secara manual di dalam JavHey.kt
+        // Mendaftarkan API utama
         registerMainAPI(JavHey())
     }
 }
