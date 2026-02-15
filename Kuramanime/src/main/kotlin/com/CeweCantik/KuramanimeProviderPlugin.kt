@@ -7,11 +7,11 @@ import android.content.Context
 @CloudstreamPlugin
 class KuramanimeProviderPlugin: Plugin() {
     override fun load(context: Context) {
-        // All providers should be added in this manner. Please don't edit the providers list directly.
+        // Daftarin semua alat tempurnya di sini biar dikenalin aplikasi.
         registerMainAPI(KuramanimeProvider())
         registerExtractorAPI(Nyomo())
         registerExtractorAPI(Streamhide())
-        registerExtractorAPI(Kuramadrive())
+        registerExtractorAPI(Kuramadrive()) // Ini yang paling penting
         registerExtractorAPI(Lbx())
         registerExtractorAPI(Sunrong())
     }
