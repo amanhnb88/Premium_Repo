@@ -34,11 +34,29 @@ class JavHey : MainAPI() {
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
     )
 
+    // --- MAIN PAGE (KATEGORI BARU) ---
     override val mainPage = mainPageOf(
-        "$mainUrl/videos/paling-baru/page=" to "Paling Baru",
-        "$mainUrl/videos/paling-dilihat/page=" to "Paling Dilihat",
-        "$mainUrl/videos/top-rating/page=" to "Top Rating",
-        "$mainUrl/videos/jav-sub-indo/page=" to "JAV Sub Indo"
+        "$mainUrl/category/3/creampie/page=" to "Creampie",
+        "$mainUrl/category/50/beautiful-breasts/page=" to "Beautiful Breasts",
+        "$mainUrl/category/113/acme-orgasm/page=" to "Acme Orgasm",
+        "$mainUrl/category/192/abuse/page=" to "Abuse",
+        "$mainUrl/category/19/beautiful-girl/page=" to "Beautiful Girl",
+        "$mainUrl/category/80/beauty-treatment/page=" to "Beauty Treatment",
+        "$mainUrl/category/20/big-butt/page=" to "Big Butt",
+        "$mainUrl/category/34/big-cock-or-big-cock/page=" to "Big Cock",
+        "$mainUrl/category/1/big-tits/page=" to "Big Tits",
+        "$mainUrl/category/51/black-actor/page=" to "Black Actor",
+        "$mainUrl/category/33/blowjob/page=" to "Blowjob",
+        "$mainUrl/category/12/cuckold-or-ntr/page=" to "Cuckold/NTR",
+        "$mainUrl/category/95/cunnilingus/page=" to "Cunnilingus",
+        "$mainUrl/category/31/decensored/page=" to "Decensored",
+        "$mainUrl/category/21/drama/page=" to "Drama",
+        "$mainUrl/category/29/female-boss/page=" to "Female Boss",
+        "$mainUrl/category/87/hot-spring/page=" to "Hot Spring",
+        "$mainUrl/category/9/housewife/page=" to "Housewife",
+        "$mainUrl/category/223/ibu-rumah-tangga/page=" to "Ibu Rumah Tangga",
+        "$mainUrl/category/225/karya-tunggal/page=" to "Karya Tunggal",
+        "$mainUrl/category/11/mature-woman/page=" to "Mature Woman"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
@@ -66,40 +84,29 @@ class JavHey : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url, headers = headers).document
 
-        // 1. Ambil Judul
         val rawTitle = document.selectFirst("article.post header.post_header h1")?.text()?.trim()
         val title = rawTitle?.replace("JAV Subtitle Indonesia - ", "") ?: "Unknown Title"
 
-        // 2. Ambil Poster
         val poster = document.selectFirst("div.product div.images img")?.attr("src")
             ?: document.selectFirst("meta[property=og:image]")?.attr("content")
 
-        // 3. Ambil Deskripsi
         val description = document.selectFirst("p.video-description")?.text()?.replace("Description: ", "")?.trim()
             ?: document.selectFirst("meta[name=description]")?.attr("content")
 
-        // 4. Metadata Tambahan
         val metaDiv = document.select("div.product_meta")
-        
-        // Ambil nama aktor (List String)
         val actorNames = metaDiv.select("span:contains(Actor) a").map { it.text() }
-        
         val tags = metaDiv.select("span:contains(Category) a, span:contains(Tag) a").map { it.text() }
         
         val releaseDateText = metaDiv.select("span:contains(Release Day)").text()
         val year = Regex("""\d{4}""").find(releaseDateText)?.value?.toIntOrNull()
 
-        // 5. Rekomendasi
         val recommendations = document.select("div.article_standard_view > article.item").mapNotNull { toSearchResult(it) }
 
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster
             this.plot = description
             this.tags = tags
-            // PERBAIKAN: Mapping manual dari String ke ActorData agar tidak Error Type Mismatch
-            this.actors = actorNames.map { name -> 
-                ActorData(Actor(name, null)) 
-            }
+            this.actors = actorNames.map { ActorData(Actor(it, null)) }
             this.year = year
             this.recommendations = recommendations
         }
