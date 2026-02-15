@@ -66,31 +66,40 @@ class JavHey : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url, headers = headers).document
 
+        // 1. Ambil Judul
         val rawTitle = document.selectFirst("article.post header.post_header h1")?.text()?.trim()
         val title = rawTitle?.replace("JAV Subtitle Indonesia - ", "") ?: "Unknown Title"
 
+        // 2. Ambil Poster
         val poster = document.selectFirst("div.product div.images img")?.attr("src")
             ?: document.selectFirst("meta[property=og:image]")?.attr("content")
 
+        // 3. Ambil Deskripsi
         val description = document.selectFirst("p.video-description")?.text()?.replace("Description: ", "")?.trim()
             ?: document.selectFirst("meta[name=description]")?.attr("content")
 
+        // 4. Metadata Tambahan
         val metaDiv = document.select("div.product_meta")
-        // Ambil list nama aktor (List<String>)
+        
+        // Ambil nama aktor (List String)
         val actorNames = metaDiv.select("span:contains(Actor) a").map { it.text() }
+        
         val tags = metaDiv.select("span:contains(Category) a, span:contains(Tag) a").map { it.text() }
         
         val releaseDateText = metaDiv.select("span:contains(Release Day)").text()
         val year = Regex("""\d{4}""").find(releaseDateText)?.value?.toIntOrNull()
 
+        // 5. Rekomendasi
         val recommendations = document.select("div.article_standard_view > article.item").mapNotNull { toSearchResult(it) }
 
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster
             this.plot = description
             this.tags = tags
-            // PERBAIKAN: Konversi List<String> menjadi List<ActorData>
-            this.actors = actorNames.map { ActorData(Actor(it)) }
+            // PERBAIKAN: Mapping manual dari String ke ActorData agar tidak Error Type Mismatch
+            this.actors = actorNames.map { name -> 
+                ActorData(Actor(name, null)) 
+            }
             this.year = year
             this.recommendations = recommendations
         }
@@ -134,6 +143,7 @@ class JavHey : MainAPI() {
     }
 }
 
+// --- CLASS EXTRACTOR LOKAL (BYSE) ---
 open class ByseSXLocal : ExtractorApi() {
     override var name = "Byse"
     override var mainUrl = "https://byse.sx"
@@ -191,6 +201,7 @@ open class ByseSXLocal : ExtractorApi() {
     }
 }
 
+// Data Classes untuk JSON Parsing
 data class DetailsRoot(@JsonProperty("embed_frame_url") val embedFrameUrl: String)
 data class PlaybackRoot(@JsonProperty("playback") val playback: Playback)
 data class Playback(@JsonProperty("iv") val iv: String, @JsonProperty("payload") val payload: String, @JsonProperty("key_parts") val keyParts: List<String>)
