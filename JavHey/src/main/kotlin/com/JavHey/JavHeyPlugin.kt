@@ -7,13 +7,7 @@ import android.content.Context
 @CloudstreamPlugin
 class JavHeyPlugin: Plugin() {
     override fun load(context: Context) {
-        // Register Main Provider Baru
-        registerMainAPI(JavHeyFinal())
-        
-        // Register Extractor Khusus (Byse)
-        // Pastikan file ByseSX.kt ada di folder yang sama
-        registerExtractorAPI(ByseBuho())
-        registerExtractorAPI(Bysezejataos())
-        registerExtractorAPI(ByseVepoin())
+        // Kita gunakan nama class baru agar cache lama tidak mengganggu
+        registerMainAPI(JavHeyFix())
     }
 }
