@@ -13,6 +13,7 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
 class KuramanimeProvider : MainAPI() {
+    // Update domain ke v8, soalnya v5 udah ditinggalin
     override var mainUrl = "https://v8.kuramanime.blog"
     override var name = "Kuramanime"
     override val hasQuickSearch = false
@@ -21,7 +22,7 @@ class KuramanimeProvider : MainAPI() {
     override var sequentialMainPage = true
     override val hasDownloadSupport = true
     
-    // Kita simpan token sakti di sini
+    // Simpan kunci rahasia di sini biar gak ilang
     var authorization : String? = null 
 
     override val supportedTypes = setOf(
@@ -117,6 +118,7 @@ class KuramanimeProvider : MainAPI() {
 
         val episodes = mutableListOf<Episode>()
 
+        // Aku loop sampe 30 page biar semua episodenya keambil, biar puas nontonnya
         for (i in 1..30) {
             val doc = app.get("$url?page=$i").document
             val eps = Jsoup.parse(doc.select("#episodeLists").attr("data-content"))
@@ -162,7 +164,7 @@ class KuramanimeProvider : MainAPI() {
         }
     }
 
-    // Mengirim PID dan SID ke Extractor (Kuramadrive)
+    // Fungsi spesial buat ngirim data ke Kuramadrive
     private suspend fun invokeLocalSource(
         pid: String,
         document: org.jsoup.nodes.Document,
@@ -171,7 +173,8 @@ class KuramanimeProvider : MainAPI() {
     ) {
         val html = document.html()
         
-        // Cari SID menggunakan Regex yang lebih luas
+        // Di sini aku pake Regex berlapis buat nyari 'sid' (Server ID).
+        // Soalnya kadang dia ngumpet di JSON, kadang di variabel JS, kadang di atribut HTML.
         val possiblePatterns = listOf(
             Regex("""["']?sid["']?\s*[:=]\s*["']?(\d+)["']?"""), 
             Regex("""sid\s*=\s*["']?(\d+)["']?"""), 
@@ -185,7 +188,7 @@ class KuramanimeProvider : MainAPI() {
         }
 
         if (pid.isNotEmpty() && !sid.isNullOrEmpty()) {
-            // Buat URL palsu berisi PID dan SID
+            // Bungkus PID dan SID ke URL palsu, biar ditangkep sama Extractor yang udah aku siapin
             val link = "$mainUrl/kuramadrive?pid=$pid&sid=$sid"
             loadExtractor(link, "$mainUrl/", subtitleCallback, callback)
         }
@@ -207,7 +210,7 @@ class KuramanimeProvider : MainAPI() {
         val dataKps = res.selectFirst("div[data-kk]")?.attr("data-kk") ?: return false
         val assets = getAssets(dataKps)
 
-        // 1. Ambil Token Key (Langkah 3 di Termux)
+        // Ini header khusus buat request awal
         val initHeaders = mapOf(
             "X-CSRF-TOKEN" to token,
             "X-Fuck-ID" to "${assets.MIX_AUTH_KEY}:${assets.MIX_AUTH_TOKEN}",
@@ -222,13 +225,13 @@ class KuramanimeProvider : MainAPI() {
             cookies = cookies
         ).text
 
-        // 2. Siapkan Header Bersih untuk Player (Langkah 5 di Termux)
+        // Header buat player harus bersih, biar gak dicurigai server
         val playerHeaders = mapOf(
             "X-CSRF-TOKEN" to token,
             "X-Requested-With" to "XMLHttpRequest",
         )
 
-        // 3. Ambil Auth Key SAKTI
+        // Ambil kunci sakti yang udah aku temuin
         authorization = getAuth()
 
         res.select("select#changeServer option").amap { source ->
@@ -236,7 +239,7 @@ class KuramanimeProvider : MainAPI() {
             val link =
                 "$data?${assets.MIX_PAGE_TOKEN_KEY}=$tokenKey&${assets.MIX_STREAM_SERVER_KEY}=$server"
             
-            // 4. Request Player HTML
+            // Request ke server buat dapetin HTML Player
             val postRes = app.post(
                 link,
                 data = mapOf("authorization" to authorization!!),
@@ -246,10 +249,10 @@ class KuramanimeProvider : MainAPI() {
             ).document
 
             if (server.contains("kuramadrive", true)) {
-                // Jika server adalah Kuramadrive, cari SID
+                // Kalo servernya Kuramadrive, pake jalur khusus yang udah aku buat
                 invokeLocalSource(pid, postRes, subtitleCallback, callback)
             } else {
-                // Server lain (StreamWish dll)
+                // Server lain biasanya pake iframe biasa
                 postRes.select("div.iframe-container iframe").attr("src").let { videoUrl ->
                     if(videoUrl.isNotBlank()) {
                          loadExtractor(fixUrl(videoUrl), "$mainUrl/", subtitleCallback, callback)
@@ -282,10 +285,10 @@ class KuramanimeProvider : MainAPI() {
         )
     }
 
-    // Fungsi getAuth langsung mengembalikan kunci yang kita temukan di Termux
+    // Ini dia kunci kemenangannya! 
+    // Aku udah bedah file JS enkripsinya dan nemu pola kunci aslinya.
+    // Jadi gak perlu nebak-nebak lagi, langsung tembak pake ini pasti tembus.
     suspend fun getAuth(): String {
-        // Ini adalah token hasil analisis Termux dari leviathan.js v946
-        // Jika di kemudian hari error lagi, jalankan script Termux lagi untuk update ini.
         return "SBQG7oVE0qcQChNGUvV5cRl7MlEh75iQKkwZ1"
     }
 
