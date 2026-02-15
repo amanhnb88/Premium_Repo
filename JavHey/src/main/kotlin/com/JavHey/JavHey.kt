@@ -8,8 +8,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 
-// GANTI NAMA CLASS JADI 'JavHeyFinal' UNTUK MENGHAPUS CACHE ERROR CHECKSUM
-class JavHeyFinal : MainAPI() {
+// GANTI NAMA CLASS (PENTING AGAR TIDAK ERROR CHECKSUM)
+class JavHeyFix : MainAPI() {
     override var mainUrl = "https://javhey.com"
     override var name = "JAVHEY"
     override val hasMainPage = true
@@ -67,6 +67,7 @@ class JavHeyFinal : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/search?s=$query"
         val searchHeaders = headers + mapOf("Referer" to "$mainUrl/")
+        
         val document = app.get(url, headers = searchHeaders).document
         return document.select("div.article_standard_view > article.item").mapNotNull {
             toSearchResult(it)
@@ -75,17 +76,22 @@ class JavHeyFinal : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url, headers = headers).document
+
         val title = document.selectFirst("h1")?.text()?.trim() ?: "Unknown Title"
+        
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
             ?: document.selectFirst(".content_banner img")?.attr("src") 
             ?: document.selectFirst("article.item img")?.attr("src")
+
         val description = document.selectFirst("meta[name=description]")?.attr("content")
             ?: document.selectFirst("meta[property=og:description]")?.attr("content")
             ?: document.select("div.main_content p").text()
             ?: "No Description"
+
         val recommendations = document.select("div.article_standard_view > article.item").mapNotNull {
             toSearchResult(it)
         }
+
         return newMovieLoadResponse(title, url, TvType.NSFW, url) {
             this.posterUrl = poster
             this.plot = description
@@ -103,8 +109,9 @@ class JavHeyFinal : MainAPI() {
         val html = app.get(data, headers = headers).text
         val rawLinks = mutableSetOf<String>()
 
-        // 1. Teknik ID="links" (Paling Akurat sesuai Termux)
+        // 1. Teknik ID="links" (Hasil Temuan Termux)
         val preciseInputRegex = Regex("""id=["']links["'][^>]*value=["']([^"']+)["']""")
+        
         // 2. Teknik Agresif (Cadangan)
         val aggressiveRegex = Regex("""(aHR0cHM6[a-zA-Z0-9+/=]+)""")
 
@@ -112,10 +119,11 @@ class JavHeyFinal : MainAPI() {
 
         allMatches.forEach { match ->
             try {
+                // Ambil data base64
                 val encodedData = match.groupValues[1]
                 val decodedData = String(Base64.decode(encodedData, Base64.DEFAULT))
                 
-                // Split berdasarkan ",,,"
+                // Split delimiter ",,,"
                 decodedData.split(",,,").forEach { rawUrl -> 
                     val url = rawUrl.trim()
                     if (url.startsWith("http")) {
@@ -125,7 +133,7 @@ class JavHeyFinal : MainAPI() {
             } catch (e: Exception) { }
         }
 
-        // 3. Fallback Iframe
+        // 3. Fallback Iframe Manual
         val iframeRegex = Regex("""<iframe[^>]+src=["']((?:https?:)?//[^"']+)["']""")
         iframeRegex.findAll(html).forEach { match ->
              var url = match.groupValues[1]
@@ -135,11 +143,16 @@ class JavHeyFinal : MainAPI() {
              }
         }
 
-        // 4. Proses Link dengan OPLAS DOMAIN (Domain Mapping)
-        rawLinks.forEach { url ->
+        // 4. Proses Link dengan OPLAS DOMAIN
+        val sortedLinks = rawLinks.sortedBy { url ->
+            if (url.contains("hgplay") || url.contains("mixdrop") || url.contains("byse")) 0 else 1
+        }
+
+        sortedLinks.forEach { url ->
             launch(Dispatchers.IO) {
                 try {
-                    // Cek apakah link ini perlu "dioplas" agar dikenali CloudStream
+                    // Mapping Manual untuk domain kloningan StreamWish yang belum dikenal CloudStream
+                    // Note: 'bysebuho' tidak di-mapping karena kamu sudah punya extractornya di Core
                     var fixedUrl = url
                     
                     if (url.contains("minochinos.com")) {
@@ -147,13 +160,11 @@ class JavHeyFinal : MainAPI() {
                     } else if (url.contains("terbit2.com")) {
                         fixedUrl = url.replace("terbit2.com", "streamwish.to")
                     } else if (url.contains("turtle4up.top")) {
-                        // Turtle4up biasanya formatnya /#hash, kita ubah jadi streamwish /e/hash
-                        val hash = url.substringAfter("#")
+                        // Turtle4up formatnya beda: /#hash -> streamwish.to/e/hash
+                        val hash = url.substringAfterLast("#")
                         fixedUrl = "https://streamwish.to/e/$hash"
-                    } 
-                    // Bysebuho kita biarkan karena kamu punya ByseSX.kt
+                    }
 
-                    // Load Extractor
                     loadExtractor(fixedUrl, data, subtitleCallback, callback)
 
                 } catch (e: Exception) { }
