@@ -7,7 +7,12 @@ import android.content.Context
 @CloudstreamPlugin
 class JavHeyPlugin: Plugin() {
     override fun load(context: Context) {
-        // Kita gunakan nama class baru agar cache lama tidak mengganggu
-        registerMainAPI(JavHeyFix())
+        // Daftarkan Provider V4
+        registerMainAPI(JavHeyV4())
+        
+        // Daftarkan Extractor Lokal yang ada di file JavHey.kt
+        registerExtractorAPI(ByseBuhoLocal())
+        registerExtractorAPI(BysezejataosLocal())
+        registerExtractorAPI(ByseVepoinLocal())
     }
 }
