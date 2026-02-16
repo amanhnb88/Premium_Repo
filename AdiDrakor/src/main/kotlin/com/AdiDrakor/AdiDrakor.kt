@@ -92,10 +92,11 @@ open class AdiDrakor : TmdbProvider() {
     }
 
     override val mainPage = mainPageOf(
-        // === UPDATE: Penambahan Kategori Terbaru ===
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_original_language=ko&sort_by=first_air_date.desc&first_air_date.lte=${getDate().today}" to "Drama Korea Terbaru",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=ko&sort_by=primary_release_date.desc&primary_release_date.lte=${getDate().today}" to "Movie Korea Terbaru",
-        // ===========================================
+        // === UPDATE: Filter rating (vote_count >= 1) ===
+        // Menambahkan &vote_count.gte=1 agar yang belum ada rating tidak muncul
+        "$tmdbAPI/discover/tv?api_key=$apiKey&with_original_language=ko&sort_by=first_air_date.desc&first_air_date.lte=${getDate().today}&vote_count.gte=1" to "Drama Korea Terbaru",
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=ko&sort_by=primary_release_date.desc&primary_release_date.lte=${getDate().today}&vote_count.gte=1" to "Movie Korea Terbaru",
+        // ===============================================
         "$tmdbAPI/discover/tv?api_key=$apiKey&with_original_language=ko&sort_by=popularity.desc" to "Popular K-Dramas",
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=ko&sort_by=popularity.desc" to "Popular Korean Movies",
         "$tmdbAPI/discover/tv?api_key=$apiKey&with_original_language=ko&sort_by=vote_average.desc&vote_count.gte=100" to "Top Rated K-Dramas",
