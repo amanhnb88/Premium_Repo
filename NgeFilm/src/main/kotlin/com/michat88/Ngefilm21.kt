@@ -22,7 +22,6 @@ class Ngefilm21 : MainAPI() {
         return url.replace(Regex("-\\d+x\\d+"), "")
     }
 
-    // --- HALAMAN UTAMA ---
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val document = app.get("$mainUrl/page/$page/").document
         val home = document.select("article.item-infinite").mapNotNull { it.toSearchResult() }
@@ -33,10 +32,7 @@ class Ngefilm21 : MainAPI() {
         val titleElement = this.selectFirst(".entry-title a") ?: return null
         val title = titleElement.text()
         val href = titleElement.attr("href")
-        
-        // Prioritas Poster: Data-Src (Lazy) -> Src
         val posterUrl = this.selectFirst(".content-thumbnail img")?.getImageAttr()
-        
         val quality = this.selectFirst(".gmr-quality-item a")?.text() ?: "HD"
         val ratingText = this.selectFirst(".gmr-rating-item")?.text()?.trim()
 
@@ -47,20 +43,18 @@ class Ngefilm21 : MainAPI() {
         }
     }
 
-    // --- PENCARIAN ---
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/?s=$query&post_type[]=post&post_type[]=tv"
         val document = app.get(url).document
         return document.select("article.item-infinite").mapNotNull { it.toSearchResult() }
     }
 
-    // --- DETAIL HALAMAN (LOAD) ---
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
         
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: ""
         
-        // FIX POSTER: Ambil dari Meta OG Image (Paling HD)
+        // Ambil Poster dari Meta Tag (Kualitas HD)
         var poster = document.selectFirst("meta[property='og:image']")?.attr("content")
         if (poster.isNullOrEmpty()) {
             poster = document.selectFirst(".gmr-movie-data figure img")?.getImageAttr()
@@ -70,16 +64,15 @@ class Ngefilm21 : MainAPI() {
         val year = document.selectFirst(".gmr-moviedata:contains(Tahun) a")?.text()?.trim()?.toIntOrNull()
         val ratingText = document.selectFirst("span[itemprop='ratingValue']")?.text()?.trim()
         val tags = document.select(".gmr-moviedata:contains(Genre) a").map { it.text() }
-        
         val actors = document.select("span[itemprop='actors'] a").mapNotNull {
             val name = it.text()
             if (name.isNotBlank()) ActorData(Actor(name, null)) else null
         }
 
+        // Trailer
         var trailerUrl = document.selectFirst("a.gmr-trailer-popup")?.attr("href")
         if (trailerUrl == null) trailerUrl = document.selectFirst("iframe[src*='youtube.com']")?.attr("src")
 
-        // Cek apakah Series atau Movie
         val episodeElements = document.select(".gmr-listseries a").filter {
             it.attr("href").contains("/eps/") && !it.text().contains("Pilih", true)
         }
@@ -90,7 +83,6 @@ class Ngefilm21 : MainAPI() {
             val episodes = episodeElements.mapNotNull { element ->
                 val epUrl = element.attr("href")
                 val epText = element.text()
-                // Regex untuk ambil nomor episode
                 val epNum = Regex("(\\d+)").find(epText)?.groupValues?.get(1)?.toIntOrNull()
                 val epName = element.attr("title").removePrefix("Permalink ke ")
                 if (epUrl.isNotEmpty()) newEpisode(epUrl) { this.name = epName; this.episode = epNum } else null
@@ -109,7 +101,7 @@ class Ngefilm21 : MainAPI() {
         return response
     }
 
-    // --- EKSTRAKSI LINK (BAGIAN KRUSIAL) ---
+    // --- BAGIAN RAJA TERAKHIR (LOAD LINKS) ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -118,15 +110,14 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // 1. SCAN IFRAME UTAMA (Solusi Masalah LiteSpeed)
-        // Website ini menyembunyikan link di atribut 'data-litespeed-src'
+        // 1. SCAN IFRAME UTAMA (SOLUSI LITESPEED)
+        // Kode ini akan membaca 'data-litespeed-src' yang berisi link rahasia tadi
         document.select("iframe").forEach { iframe ->
-            var src = iframe.attr("data-litespeed-src") // Prioritas 1
-            if (src.isEmpty()) src = iframe.attr("data-src") // Prioritas 2
-            if (src.isEmpty()) src = iframe.attr("src")      // Prioritas 3
+            var src = iframe.attr("data-litespeed-src") // Prioritas 1: Link Rahasia
+            if (src.isEmpty()) src = iframe.attr("data-src") // Prioritas 2: Lazy Load Biasa
+            if (src.isEmpty()) src = iframe.attr("src")      // Prioritas 3: Link Biasa
             
             val fixedSrc = fixUrl(src)
-            // Filter link sampah (iklan/tracking)
             if (isValidLink(fixedSrc)) {
                 loadExtractor(fixedSrc, subtitleCallback, callback)
             }
@@ -134,11 +125,12 @@ class Ngefilm21 : MainAPI() {
 
         // 2. SCAN LINK DOWNLOAD
         document.select(".gmr-download-list a").forEach { link ->
-            loadExtractor(link.attr("href"), subtitleCallback, callback)
+            val href = link.attr("href")
+            loadExtractor(href, subtitleCallback, callback)
         }
 
-        // 3. SCAN SERVER TAMBAHAN (AJAX Attack)
-        // Kita butuh Post ID untuk request ke server
+        // 3. SCAN SERVER LAIN (AJAX)
+        // Membuka Server 2, 3, dst
         val postId = document.selectFirst("#muvipro_player_content_id")?.attr("data-id")
             ?: document.selectFirst("link[rel='shortlink']")?.attr("href")?.substringAfter("?p=")
 
@@ -150,7 +142,6 @@ class Ngefilm21 : MainAPI() {
                 val nume = tab.attr("data-nume")
                 if (nume.isNotEmpty()) {
                     try {
-                        // Tembak AJAX dengan Header Lengkap (Wajib ada Referer!)
                         val jsonResponse = app.post(
                             ajaxUrl,
                             data = mapOf(
@@ -158,17 +149,12 @@ class Ngefilm21 : MainAPI() {
                                 "tab" to "player-option-$nume",
                                 "post_id" to postId
                             ),
-                            headers = mapOf(
-                                "X-Requested-With" to "XMLHttpRequest",
-                                "Referer" to data, // Header KTP biar server tidak menolak
-                                "Content-Type" to "application/x-www-form-urlencoded"
-                            )
+                            headers = mapOf("X-Requested-With" to "XMLHttpRequest", "Referer" to data)
                         ).text
 
-                        // Parsing HTML dari respon AJAX
                         val ajaxDoc = Jsoup.parse(jsonResponse)
                         ajaxDoc.select("iframe").forEach { iframe ->
-                            var src = iframe.attr("data-litespeed-src")
+                            var src = iframe.attr("data-litespeed-src") // Cek rahasia di server lain juga
                             if (src.isEmpty()) src = iframe.attr("src")
                             
                             val fixedSrc = fixUrl(src)
@@ -176,9 +162,7 @@ class Ngefilm21 : MainAPI() {
                                 loadExtractor(fixedSrc, subtitleCallback, callback)
                             }
                         }
-                    } catch (e: Exception) {
-                        // Lanjut ke server berikutnya jika error
-                    }
+                    } catch (e: Exception) {}
                 }
             }
         }
@@ -186,12 +170,11 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
-    // Filter untuk membuang link yang bukan video
     private fun isValidLink(url: String): Boolean {
         return url.isNotBlank() && 
+               !url.contains("about:blank") && 
                !url.contains("youtube.com") && 
                !url.contains("googletagmanager") &&
-               !url.contains("facebook.com") &&
-               !url.contains("about:blank")
+               !url.contains("facebook.com")
     }
 }
