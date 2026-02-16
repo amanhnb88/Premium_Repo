@@ -94,7 +94,6 @@ class NgeFilmProvider : MainAPI() {
         }
         poster = fixUrl(poster ?: "")
         
-        // Kita pake poster HD buat background juga biar cakep
         val backgroundPoster = poster 
 
         val description = document.select("div.entry-content p").text().trim()
@@ -103,14 +102,13 @@ class NgeFilmProvider : MainAPI() {
         val tags = document.select("span:contains(Genre) a").map { it.text() }
         val trailer = document.select("a.gmr-trailer-popup").attr("href")
 
-        // --- FITUR BARU: ACTORS (Daftar Artis) ---
-        // Mencari elemen yang berisi nama artis (Pemeran/Stars)
+        // --- FIX ACTORS (Daftar Artis) ---
+        // Hapus ActorData(), langsung Actor() saja. Image null karena cuma ada nama.
         val actors = document.select("span:contains(Pemeran) a, span:contains(Stars) a").map {
-            ActorData(Actor(it.text(), it.attr("href")))
+            Actor(it.text(), null)
         }
 
-        // --- FITUR BARU: RECOMMENDATIONS (Film Terkait) ---
-        // Mengambil film dari kolom "Related" atau "You may also like"
+        // --- FITUR RECOMMENDATIONS ---
         val recommendations = document.select("div.yarpp-related article, div#gmr-related-post article, div.gmr-related-post article").mapNotNull {
             it.toSearchResult()
         }
@@ -133,24 +131,24 @@ class NgeFilmProvider : MainAPI() {
             }
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
-                this.backgroundPosterUrl = backgroundPoster // Fitur Background
+                this.backgroundPosterUrl = backgroundPoster
                 this.plot = description
                 this.year = year
                 this.tags = tags
                 addTrailer(trailer)
-                addActors(actors) // Fitur Actors
-                this.recommendations = recommendations // Fitur Rekomendasi
+                addActors(actors) // Sekarang tipe datanya sudah benar List<Actor>
+                this.recommendations = recommendations
             }
         } else {
             return newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
-                this.backgroundPosterUrl = backgroundPoster // Fitur Background
+                this.backgroundPosterUrl = backgroundPoster
                 this.plot = description
                 this.year = year
                 this.tags = tags
                 addTrailer(trailer)
-                addActors(actors) // Fitur Actors
-                this.recommendations = recommendations // Fitur Rekomendasi
+                addActors(actors) // Sekarang tipe datanya sudah benar List<Actor>
+                this.recommendations = recommendations
             }
         }
     }
