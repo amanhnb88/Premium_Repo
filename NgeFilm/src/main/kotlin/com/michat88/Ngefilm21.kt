@@ -45,6 +45,7 @@ class Ngefilm21 : MainAPI() {
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = posterUrl
             addQuality(quality)
+            // Menggunakan Score.from10 untuk sistem rating baru
             this.score = Score.from10(ratingText?.toDoubleOrNull())
         }
     }
@@ -71,6 +72,7 @@ class Ngefilm21 : MainAPI() {
         // 2. Mengambil Genre dan Aktor
         val tags = document.select(".gmr-moviedata:contains(Genre) a").map { it.text() }
         
+        // Map Actor ke ActorData agar sesuai tipe data
         val actors = document.select("span[itemprop='actors'] a").mapNotNull {
             val name = it.text()
             if (name.isNotBlank()) {
@@ -143,41 +145,45 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // Cek Iframe langsung
+        // 1. Ekstrak Player Utama (Iframe yang langsung terlihat)
         document.select("iframe").forEach { iframe ->
-            var src = iframe.attr("src")
-            if (src.startsWith("//")) src = "https:$src"
+            val src = iframe.attr("src")
+            val fixedSrc = if (src.startsWith("//")) "https:$src" else src
             
-            if (!src.contains("youtube.com") && !src.contains("wp-embedded-content")) {
-                loadExtractor(src, subtitleCallback, callback)
+            // Hindari trailer youtube atau embed wordpress internal
+            if (!fixedSrc.contains("youtube.com") && !fixedSrc.contains("wp-embedded-content")) {
+                loadExtractor(fixedSrc, subtitleCallback, callback)
             }
         }
 
-        // Cek Navigasi Player (AJAX)
-        val serverIds = document.select(".gmr-player-nav li a").mapNotNull { 
-            val postId = it.attr("data-post")
-            val num = it.attr("data-nume")
-            if (postId.isNotEmpty() && num.isNotEmpty()) postId to num else null
+        // 2. Ekstrak Link Download (Bagian bawah player)
+        // Link ini biasanya FilePress/GDrive yang kualitasnya bagus (1080p, 720p)
+        document.select(".gmr-download-list a").forEach { link ->
+            val href = link.attr("href")
+            // Kirim link download ke extractor (CloudStream akan mencoba mengenali FilePress/GDrive)
+            loadExtractor(href, subtitleCallback, callback)
         }
-        
-        if (serverIds.isNotEmpty()) {
-            serverIds.forEach { (postId, num) ->
-                val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php"
-                val formData = mapOf(
-                    "action" to "muvipro_player_content",
-                    "tab" to "player$num",
-                    "post_id" to postId
-                )
-                
+
+        // 3. Ekstrak Server Tambahan (Tab Server 2, Server 3, dst)
+        document.select(".muvipro-player-tabs a").forEach { tab ->
+            val href = tab.attr("href")
+            
+            // Jika link mengandung '?player=' dan bukan tab yang sedang aktif
+            if (href.contains("?player=") && !tab.hasClass("active")) {
+                val fullUrl = fixUrl(href)
                 try {
-                    val response = app.post(ajaxUrl, data = formData).text
-                    val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
-                    
-                    if (iframeSrc.isNotEmpty()) {
-                         loadExtractor(iframeSrc, subtitleCallback, callback)
+                    // Request halaman server tersebut untuk mengambil iframe di dalamnya
+                    val subDoc = app.get(fullUrl).document
+                    subDoc.select("iframe").forEach { iframe ->
+                        val src = iframe.attr("src")
+                        val fixedSrc = if (src.startsWith("//")) "https:$src" else src
+                        
+                        if (!fixedSrc.contains("youtube.com")) {
+                            loadExtractor(fixedSrc, subtitleCallback, callback)
+                        }
                     }
                 } catch (e: Exception) {
-                    // Abaikan error
+                    // Abaikan jika gagal memuat server tambahan
                 }
             }
         }
