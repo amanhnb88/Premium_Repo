@@ -45,13 +45,11 @@ class Ngefilm21 : MainAPI() {
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = posterUrl
             addQuality(quality)
-            // Menggunakan Score.from10 untuk sistem rating baru
             this.score = Score.from10(ratingText?.toDoubleOrNull())
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        // URL Search pattern berdasarkan form di HTML
         val url = "$mainUrl/?s=$query&post_type[]=post&post_type[]=tv"
         val document = app.get(url).document
 
@@ -73,7 +71,6 @@ class Ngefilm21 : MainAPI() {
         // 2. Mengambil Genre dan Aktor
         val tags = document.select(".gmr-moviedata:contains(Genre) a").map { it.text() }
         
-        // Map Actor ke ActorData agar sesuai tipe data
         val actors = document.select("span[itemprop='actors'] a").mapNotNull {
             val name = it.text()
             if (name.isNotBlank()) {
@@ -95,7 +92,7 @@ class Ngefilm21 : MainAPI() {
         val isSeries = episodeElements.isNotEmpty()
         val type = if (isSeries) TvType.TvSeries else TvType.Movie
 
-        if (isSeries) {
+        val response = if (isSeries) {
             val episodes = episodeElements.mapNotNull { element ->
                 val epUrl = element.attr("href")
                 val epText = element.text()
@@ -111,34 +108,31 @@ class Ngefilm21 : MainAPI() {
                 } else null
             }
             
-            return newTvSeriesLoadResponse(title, url, type, episodes) {
+            newTvSeriesLoadResponse(title, url, type, episodes) {
                 this.posterUrl = poster
                 this.plot = plot
                 this.year = year
                 this.score = Score.from10(ratingText?.toDoubleOrNull())
                 this.tags = tags
                 this.actors = actors
-                
-                // FIX TRAILER: Tambahkan langsung ke list trailers
-                if (trailerUrl != null) {
-                    this.trailers.add(TrailerData(trailerUrl, null, false))
-                }
             }
         } else {
-            return newMovieLoadResponse(title, url, type, url) {
+            newMovieLoadResponse(title, url, type, url) {
                 this.posterUrl = poster
                 this.plot = plot
                 this.year = year
                 this.score = Score.from10(ratingText?.toDoubleOrNull())
                 this.tags = tags
                 this.actors = actors
-                
-                // FIX TRAILER: Tambahkan langsung ke list trailers
-                if (trailerUrl != null) {
-                    this.trailers.add(TrailerData(trailerUrl, null, false))
-                }
             }
         }
+
+        // FIX TRAILER: Masukkan ke list trailers manual di luar blok builder
+        if (trailerUrl != null) {
+             response.trailers.add(TrailerData(trailerUrl, null, false))
+        }
+
+        return response
     }
 
     override suspend fun loadLinks(
