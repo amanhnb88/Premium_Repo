@@ -16,7 +16,6 @@ class Ngefilm21 : MainAPI() {
         TvType.AsianDrama
     )
 
-    // Helper untuk membersihkan URL gambar
     private fun Element.getImageAttr(): String? {
         val url = this.attr("data-src").ifEmpty { this.attr("src") }
         return url.replace(Regex("-\\d+x\\d+"), "")
@@ -51,15 +50,11 @@ class Ngefilm21 : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
-        
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: ""
-        
-        // Ambil Poster dari Meta Tag (Kualitas HD)
         var poster = document.selectFirst("meta[property='og:image']")?.attr("content")
         if (poster.isNullOrEmpty()) {
             poster = document.selectFirst(".gmr-movie-data figure img")?.getImageAttr()
         }
-        
         val plot = document.selectFirst("div.entry-content[itemprop='description'] p")?.text()?.trim()
         val year = document.selectFirst(".gmr-moviedata:contains(Tahun) a")?.text()?.trim()?.toIntOrNull()
         val ratingText = document.selectFirst("span[itemprop='ratingValue']")?.text()?.trim()
@@ -69,7 +64,6 @@ class Ngefilm21 : MainAPI() {
             if (name.isNotBlank()) ActorData(Actor(name, null)) else null
         }
 
-        // Trailer
         var trailerUrl = document.selectFirst("a.gmr-trailer-popup")?.attr("href")
         if (trailerUrl == null) trailerUrl = document.selectFirst("iframe[src*='youtube.com']")?.attr("src")
 
@@ -101,7 +95,7 @@ class Ngefilm21 : MainAPI() {
         return response
     }
 
-    // --- BAGIAN RAJA TERAKHIR (LOAD LINKS) ---
+    // --- BAGIAN INI YANG CANGGIH (MATA TUHAN V20) ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -110,27 +104,30 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // 1. SCAN IFRAME UTAMA (SOLUSI LITESPEED)
-        // Kode ini akan membaca 'data-litespeed-src' yang berisi link rahasia tadi
+        // 1. SCAN IFRAME (Termasuk LiteSpeed)
         document.select("iframe").forEach { iframe ->
-            var src = iframe.attr("data-litespeed-src") // Prioritas 1: Link Rahasia
-            if (src.isEmpty()) src = iframe.attr("data-src") // Prioritas 2: Lazy Load Biasa
-            if (src.isEmpty()) src = iframe.attr("src")      // Prioritas 3: Link Biasa
+            var src = iframe.attr("data-litespeed-src")
+            if (src.isEmpty()) src = iframe.attr("data-src")
+            if (src.isEmpty()) src = iframe.attr("src")
             
             val fixedSrc = fixUrl(src)
             if (isValidLink(fixedSrc)) {
-                loadExtractor(fixedSrc, subtitleCallback, callback)
+                // JIKA LINK ADALAH RPMLIVE, KITA BONGKAR MANUAL
+                if (fixedSrc.contains("rpmlive.online")) {
+                    resolveRpmlive(fixedSrc, data, subtitleCallback, callback)
+                } else {
+                    // Link biasa, biarkan Cloudstream menangani
+                    loadExtractor(fixedSrc, data, subtitleCallback, callback)
+                }
             }
         }
 
         // 2. SCAN LINK DOWNLOAD
         document.select(".gmr-download-list a").forEach { link ->
-            val href = link.attr("href")
-            loadExtractor(href, subtitleCallback, callback)
+            loadExtractor(link.attr("href"), subtitleCallback, callback)
         }
 
         // 3. SCAN SERVER LAIN (AJAX)
-        // Membuka Server 2, 3, dst
         val postId = document.selectFirst("#muvipro_player_content_id")?.attr("data-id")
             ?: document.selectFirst("link[rel='shortlink']")?.attr("href")?.substringAfter("?p=")
 
@@ -154,12 +151,16 @@ class Ngefilm21 : MainAPI() {
 
                         val ajaxDoc = Jsoup.parse(jsonResponse)
                         ajaxDoc.select("iframe").forEach { iframe ->
-                            var src = iframe.attr("data-litespeed-src") // Cek rahasia di server lain juga
+                            var src = iframe.attr("data-litespeed-src")
                             if (src.isEmpty()) src = iframe.attr("src")
                             
                             val fixedSrc = fixUrl(src)
                             if (isValidLink(fixedSrc)) {
-                                loadExtractor(fixedSrc, subtitleCallback, callback)
+                                if (fixedSrc.contains("rpmlive.online")) {
+                                    resolveRpmlive(fixedSrc, data, subtitleCallback, callback)
+                                } else {
+                                    loadExtractor(fixedSrc, data, subtitleCallback, callback)
+                                }
                             }
                         }
                     } catch (e: Exception) {}
@@ -168,6 +169,49 @@ class Ngefilm21 : MainAPI() {
         }
 
         return true
+    }
+
+    // --- FUNGSI KHUSUS MEMBONGKAR RPMLIVE ---
+    private suspend fun resolveRpmlive(
+        url: String, 
+        referer: String, 
+        subtitleCallback: (SubtitleFile) -> Unit, 
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            // 1. Buka halaman player (bukan video) dengan Referer asli
+            val response = app.get(
+                url, 
+                headers = mapOf("Referer" to referer, "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            ).text
+
+            // 2. Cari file .m3u8 atau .mp4 di dalam kode sumbernya menggunakan Regex
+            // Pola umum: file: "https://..." atau source: "https://..."
+            val m3u8Regex = Regex("""(https?://[^"']+\.m3u8[^"']*)""")
+            val m3u8Match = m3u8Regex.find(response)
+
+            if (m3u8Match != null) {
+                val videoUrl = m3u8Match.groupValues[1]
+                
+                // 3. Kirim link video MURNI ke player
+                callback.invoke(
+                    ExtractorLink(
+                        name = "Ngefilm21 (VIP)",
+                        name = "Ngefilm21 (VIP)",
+                        source = "Rpmlive",
+                        url = videoUrl,
+                        referer = "https://playerngefilm21.rpmlive.online/", // Referer khusus player
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = true
+                    )
+                )
+            } else {
+                // Jika gagal regex, coba load biasa sbg cadangan
+                loadExtractor(url, referer, subtitleCallback, callback)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     private fun isValidLink(url: String): Boolean {
