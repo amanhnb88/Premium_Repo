@@ -78,9 +78,9 @@ class NgefilmProvider : MainAPI() {
         val duration = document.selectFirst(".gmr-movie-data:contains(Durasi) span")?.text()
             ?.replace("Menit", "")?.trim()?.toIntOrNull()
         
-        // Fix: Gunakan score API yang baru, bukan rating yang deprecated
+        // Fix: Gunakan Score API yang baru
         val ratingValue = document.selectFirst(".gmr-movie-data:contains(Rating) span")?.text()?.toDoubleOrNull()
-        val score = ratingValue?.let { ShowStatus.Ongoing }
+        val score = Score.from10(ratingValue?.toInt())
         
         val plot = document.selectFirst(".entry-content[itemprop=description]")?.text()?.trim()
         val tags = document.select(".gmr-movie-data:contains(Genre) span a").map { it.text() }
@@ -89,7 +89,7 @@ class NgefilmProvider : MainAPI() {
         val trailerUrl = document.select("iframe[src*=youtube.com], iframe[src*=youtu.be]")
             .firstOrNull()?.attr("src")
         
-        // Fix: addActors hanya menerima List<Actor> atau List<Pair<Actor, String?>>
+        // Fix: addActors hanya menerima List<Actor>
         val actors = document.select(".gmr-movie-data:contains(Bintang) span a").map {
             Actor(it.text())
         }
@@ -99,7 +99,7 @@ class NgefilmProvider : MainAPI() {
             it.toSearchResult()
         }
         
-        // Cek apakah series atau movie
+        // Cek apakah series atau movie - Fix: Gunakan newEpisode method
         val episodes = document.select(".gmr-listseries a").mapNotNull { eps ->
             val href = fixUrl(eps.attr("href"))
             val name = eps.text().trim()
@@ -107,12 +107,12 @@ class NgefilmProvider : MainAPI() {
             val episodeNum = Regex("Episode\\s*(\\d+)").find(name)?.groupValues?.get(1)?.toIntOrNull()
             val seasonNum = Regex("Season\\s*(\\d+)").find(name)?.groupValues?.get(1)?.toIntOrNull()
             
-            Episode(
-                data = href,
-                name = name,
-                season = seasonNum,
-                episode = episodeNum
-            )
+            // Fix: Gunakan newEpisode method dari MainAPI
+            newEpisode(href) {
+                this.name = name
+                this.season = seasonNum
+                this.episode = episodeNum
+            }
         }
         
         return if (episodes.isNotEmpty()) {
@@ -121,8 +121,8 @@ class NgefilmProvider : MainAPI() {
                 this.year = year
                 this.plot = plot
                 this.tags = tags
-                // Fix: Gunakan showRating untuk rating
-                this.showRating = ratingValue?.times(10)?.toInt()
+                // Fix: Gunakan score property, bukan rating
+                this.score = score
                 this.duration = duration
                 addActors(actors)
                 addTrailer(trailerUrl)
@@ -134,8 +134,8 @@ class NgefilmProvider : MainAPI() {
                 this.year = year
                 this.plot = plot
                 this.tags = tags
-                // Fix: Gunakan showRating untuk rating
-                this.showRating = ratingValue?.times(10)?.toInt()
+                // Fix: Gunakan score property, bukan rating
+                this.score = score
                 this.duration = duration
                 addActors(actors)
                 addTrailer(trailerUrl)
@@ -195,20 +195,20 @@ class NgefilmProvider : MainAPI() {
         try {
             val doc = app.get(url).document
             
-            // Cari video source
+            // Cari video source - Fix: Gunakan newExtractorLink
             doc.select("video source, source[type*=video]").forEach { source ->
                 val videoUrl = source.attr("src")
                 if (videoUrl.isNotBlank()) {
-                    // Fix: Gunakan method helper untuk membuat ExtractorLink
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             source = this.name,
                             name = this.name,
                             url = fixUrl(videoUrl),
-                            referer = url,
-                            quality = Qualities.Unknown.value,
-                            isM3u8 = videoUrl.contains(".m3u8")
-                        )
+                            type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else null
+                        ) {
+                            this.referer = url
+                            this.quality = Qualities.Unknown.value
+                        }
                     )
                 }
             }
@@ -238,14 +238,15 @@ class NgefilmProvider : MainAPI() {
                 m3u8Pattern.findAll(scriptContent).forEach { match ->
                     val m3u8Url = match.groupValues[1]
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             source = this.name,
                             name = this.name + " HLS",
                             url = m3u8Url,
-                            referer = url,
-                            quality = Qualities.Unknown.value,
-                            isM3u8 = true
-                        )
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = url
+                            this.quality = Qualities.Unknown.value
+                        }
                     )
                 }
                 
@@ -254,13 +255,14 @@ class NgefilmProvider : MainAPI() {
                 mp4Pattern.findAll(scriptContent).forEach { match ->
                     val mp4Url = match.groupValues[1]
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             source = this.name,
                             name = this.name + " MP4",
-                            url = mp4Url,
-                            referer = url,
-                            quality = Qualities.Unknown.value
-                        )
+                            url = mp4Url
+                        ) {
+                            this.referer = url
+                            this.quality = Qualities.Unknown.value
+                        }
                     )
                 }
             }
