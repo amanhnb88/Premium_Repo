@@ -16,12 +16,13 @@ class Ngefilm21 : MainAPI() {
         TvType.AsianDrama
     )
 
+    // Helper untuk membersihkan URL gambar
     private fun Element.getImageAttr(): String? {
-        // Cek lazy load data-src, lalu src biasa
         val url = this.attr("data-src").ifEmpty { this.attr("src") }
         return url.replace(Regex("-\\d+x\\d+"), "")
     }
 
+    // --- HALAMAN UTAMA ---
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val document = app.get("$mainUrl/page/$page/").document
         val home = document.select("article.item-infinite").mapNotNull { it.toSearchResult() }
@@ -32,7 +33,10 @@ class Ngefilm21 : MainAPI() {
         val titleElement = this.selectFirst(".entry-title a") ?: return null
         val title = titleElement.text()
         val href = titleElement.attr("href")
+        
+        // Prioritas Poster: Data-Src (Lazy) -> Src
         val posterUrl = this.selectFirst(".content-thumbnail img")?.getImageAttr()
+        
         val quality = this.selectFirst(".gmr-quality-item a")?.text() ?: "HD"
         val ratingText = this.selectFirst(".gmr-rating-item")?.text()?.trim()
 
@@ -43,19 +47,20 @@ class Ngefilm21 : MainAPI() {
         }
     }
 
+    // --- PENCARIAN ---
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/?s=$query&post_type[]=post&post_type[]=tv"
         val document = app.get(url).document
         return document.select("article.item-infinite").mapNotNull { it.toSearchResult() }
     }
 
+    // --- DETAIL HALAMAN (LOAD) ---
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
         
-        // 1. Ambil Metadata
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: ""
         
-        // Poster Priority: Meta OG (HD) -> Figure -> Img
+        // FIX POSTER: Ambil dari Meta OG Image (Paling HD)
         var poster = document.selectFirst("meta[property='og:image']")?.attr("content")
         if (poster.isNullOrEmpty()) {
             poster = document.selectFirst(".gmr-movie-data figure img")?.getImageAttr()
@@ -71,11 +76,10 @@ class Ngefilm21 : MainAPI() {
             if (name.isNotBlank()) ActorData(Actor(name, null)) else null
         }
 
-        // 2. Ambil Trailer
         var trailerUrl = document.selectFirst("a.gmr-trailer-popup")?.attr("href")
         if (trailerUrl == null) trailerUrl = document.selectFirst("iframe[src*='youtube.com']")?.attr("src")
 
-        // 3. Cek Episode (Series)
+        // Cek apakah Series atau Movie
         val episodeElements = document.select(".gmr-listseries a").filter {
             it.attr("href").contains("/eps/") && !it.text().contains("Pilih", true)
         }
@@ -86,6 +90,7 @@ class Ngefilm21 : MainAPI() {
             val episodes = episodeElements.mapNotNull { element ->
                 val epUrl = element.attr("href")
                 val epText = element.text()
+                // Regex untuk ambil nomor episode
                 val epNum = Regex("(\\d+)").find(epText)?.groupValues?.get(1)?.toIntOrNull()
                 val epName = element.attr("title").removePrefix("Permalink ke ")
                 if (epUrl.isNotEmpty()) newEpisode(epUrl) { this.name = epName; this.episode = epNum } else null
@@ -104,6 +109,7 @@ class Ngefilm21 : MainAPI() {
         return response
     }
 
+    // --- EKSTRAKSI LINK (BAGIAN KRUSIAL) ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -112,35 +118,39 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // --- STRATEGI 1: IFRAME LANGSUNG (Jaga-jaga kalau player balik ke HTML) ---
+        // 1. SCAN IFRAME UTAMA (Solusi Masalah LiteSpeed)
+        // Website ini menyembunyikan link di atribut 'data-litespeed-src'
         document.select("iframe").forEach { iframe ->
-            var src = iframe.attr("data-litespeed-src") // Prioritas Litespeed
-            if (src.isEmpty()) src = iframe.attr("data-src")
-            if (src.isEmpty()) src = iframe.attr("src")
+            var src = iframe.attr("data-litespeed-src") // Prioritas 1
+            if (src.isEmpty()) src = iframe.attr("data-src") // Prioritas 2
+            if (src.isEmpty()) src = iframe.attr("src")      // Prioritas 3
             
             val fixedSrc = fixUrl(src)
+            // Filter link sampah (iklan/tracking)
             if (isValidLink(fixedSrc)) {
                 loadExtractor(fixedSrc, subtitleCallback, callback)
             }
         }
 
-        // --- STRATEGI 2: AJAX ATTACK (Penyebab utama error kamu) ---
-        // Kita ambil ID "27103" itu secara dinamis
+        // 2. SCAN LINK DOWNLOAD
+        document.select(".gmr-download-list a").forEach { link ->
+            loadExtractor(link.attr("href"), subtitleCallback, callback)
+        }
+
+        // 3. SCAN SERVER TAMBAHAN (AJAX Attack)
+        // Kita butuh Post ID untuk request ke server
         val postId = document.selectFirst("#muvipro_player_content_id")?.attr("data-id")
             ?: document.selectFirst("link[rel='shortlink']")?.attr("href")?.substringAfter("?p=")
 
         if (postId != null) {
             val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php"
-            
-            // Cari semua tombol server (Server 1, Server 2, dst)
             val serverTabs = document.select(".muvipro-player-tabs li")
             
             serverTabs.forEach { tab ->
-                val nume = tab.attr("data-nume") // Contoh: 1
+                val nume = tab.attr("data-nume")
                 if (nume.isNotEmpty()) {
                     try {
-                        // KUNCI SUKSES: HEADER LENGKAP!
-                        // Server menolak curl kamu karena tidak ada 'Referer' dan 'Content-Type'
+                        // Tembak AJAX dengan Header Lengkap (Wajib ada Referer!)
                         val jsonResponse = app.post(
                             ajaxUrl,
                             data = mapOf(
@@ -150,15 +160,15 @@ class Ngefilm21 : MainAPI() {
                             ),
                             headers = mapOf(
                                 "X-Requested-With" to "XMLHttpRequest",
-                                "Referer" to data, // Ini KTP-nya! Kita bilang "Saya dari halaman film X"
+                                "Referer" to data, // Header KTP biar server tidak menolak
                                 "Content-Type" to "application/x-www-form-urlencoded"
                             )
                         ).text
 
-                        // Server membalas dengan HTML Iframe
+                        // Parsing HTML dari respon AJAX
                         val ajaxDoc = Jsoup.parse(jsonResponse)
                         ajaxDoc.select("iframe").forEach { iframe ->
-                            var src = iframe.attr("data-litespeed-src") // Cek Litespeed di dalam AJAX
+                            var src = iframe.attr("data-litespeed-src")
                             if (src.isEmpty()) src = iframe.attr("src")
                             
                             val fixedSrc = fixUrl(src)
@@ -167,24 +177,21 @@ class Ngefilm21 : MainAPI() {
                             }
                         }
                     } catch (e: Exception) {
-                        // Jika server 1 gagal, lanjut ke server 2
+                        // Lanjut ke server berikutnya jika error
                     }
                 }
             }
-        }
-        
-        // --- STRATEGI 3: LINK DOWNLOAD (GDrive/FilePress) ---
-        document.select(".gmr-download-list a").forEach { link ->
-            loadExtractor(link.attr("href"), subtitleCallback, callback)
         }
 
         return true
     }
 
+    // Filter untuk membuang link yang bukan video
     private fun isValidLink(url: String): Boolean {
         return url.isNotBlank() && 
                !url.contains("youtube.com") && 
-               !url.contains("wp-embedded-content") &&
-               !url.contains("maps.google.com")
+               !url.contains("googletagmanager") &&
+               !url.contains("facebook.com") &&
+               !url.contains("about:blank")
     }
 }
