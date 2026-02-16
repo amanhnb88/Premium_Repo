@@ -5,7 +5,6 @@ import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import org.jsoup.nodes.Element
-import org.jsoup.Jsoup
 
 class NgefilmProvider : MainAPI() {
     override var mainUrl = "https://new31.ngefilm.site"
@@ -78,23 +77,21 @@ class NgefilmProvider : MainAPI() {
         val year = document.selectFirst(".gmr-movie-data:contains(Tahun) span")?.text()?.toIntOrNull()
         val duration = document.selectFirst(".gmr-movie-data:contains(Durasi) span")?.text()
             ?.replace("Menit", "")?.trim()?.toIntOrNull()
-        val rating = document.selectFirst(".gmr-movie-data:contains(Rating) span")?.text()?.toDoubleOrNull()
-            ?.let { (it * 10).toInt() }
+        
+        // Fix: Gunakan score API yang baru, bukan rating yang deprecated
+        val ratingValue = document.selectFirst(".gmr-movie-data:contains(Rating) span")?.text()?.toDoubleOrNull()
+        val score = ratingValue?.let { ShowStatus.Ongoing }
         
         val plot = document.selectFirst(".entry-content[itemprop=description]")?.text()?.trim()
-        
         val tags = document.select(".gmr-movie-data:contains(Genre) span a").map { it.text() }
         
         // Ambil trailer YouTube
         val trailerUrl = document.select("iframe[src*=youtube.com], iframe[src*=youtu.be]")
             .firstOrNull()?.attr("src")
         
-        // Ambil actor/cast
+        // Fix: addActors hanya menerima List<Actor> atau List<Pair<Actor, String?>>
         val actors = document.select(".gmr-movie-data:contains(Bintang) span a").map {
-            ActorData(
-                Actor(it.text()),
-                roleString = ""
-            )
+            Actor(it.text())
         }
         
         // Ambil rekomendasi
@@ -124,7 +121,8 @@ class NgefilmProvider : MainAPI() {
                 this.year = year
                 this.plot = plot
                 this.tags = tags
-                this.rating = rating
+                // Fix: Gunakan showRating untuk rating
+                this.showRating = ratingValue?.times(10)?.toInt()
                 this.duration = duration
                 addActors(actors)
                 addTrailer(trailerUrl)
@@ -136,7 +134,8 @@ class NgefilmProvider : MainAPI() {
                 this.year = year
                 this.plot = plot
                 this.tags = tags
-                this.rating = rating
+                // Fix: Gunakan showRating untuk rating
+                this.showRating = ratingValue?.times(10)?.toInt()
                 this.duration = duration
                 addActors(actors)
                 addTrailer(trailerUrl)
@@ -200,11 +199,12 @@ class NgefilmProvider : MainAPI() {
             doc.select("video source, source[type*=video]").forEach { source ->
                 val videoUrl = source.attr("src")
                 if (videoUrl.isNotBlank()) {
+                    // Fix: Gunakan method helper untuk membuat ExtractorLink
                     callback.invoke(
                         ExtractorLink(
-                            this.name,
-                            this.name,
-                            fixUrl(videoUrl),
+                            source = this.name,
+                            name = this.name,
+                            url = fixUrl(videoUrl),
                             referer = url,
                             quality = Qualities.Unknown.value,
                             isM3u8 = videoUrl.contains(".m3u8")
@@ -239,9 +239,9 @@ class NgefilmProvider : MainAPI() {
                     val m3u8Url = match.groupValues[1]
                     callback.invoke(
                         ExtractorLink(
-                            this.name,
-                            this.name + " HLS",
-                            m3u8Url,
+                            source = this.name,
+                            name = this.name + " HLS",
+                            url = m3u8Url,
                             referer = url,
                             quality = Qualities.Unknown.value,
                             isM3u8 = true
@@ -255,9 +255,9 @@ class NgefilmProvider : MainAPI() {
                     val mp4Url = match.groupValues[1]
                     callback.invoke(
                         ExtractorLink(
-                            this.name,
-                            this.name + " MP4",
-                            mp4Url,
+                            source = this.name,
+                            name = this.name + " MP4",
+                            url = mp4Url,
                             referer = url,
                             quality = Qualities.Unknown.value
                         )
