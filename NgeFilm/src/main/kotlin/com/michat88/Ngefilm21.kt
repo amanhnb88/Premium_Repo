@@ -3,7 +3,7 @@ package com.michat88
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-import org.jsoup.Jsoup // Tambahan import Jsoup
+import org.jsoup.Jsoup
 
 class Ngefilm21 : MainAPI() {
     override var mainUrl = "https://new31.ngefilm.site"
@@ -43,7 +43,7 @@ class Ngefilm21 : MainAPI() {
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = posterUrl
             addQuality(quality)
-            // PERBAIKAN: Menggunakan Score.from10() bukan rating
+            // Fix: Assign score langsung ke property
             this.score = Score.from10(ratingText?.toDoubleOrNull())
         }
     }
@@ -80,7 +80,6 @@ class Ngefilm21 : MainAPI() {
                 val epNum = Regex("Episode\\s+(\\d+)").find(epTitle)?.groupValues?.get(1)?.toIntOrNull()
                 
                 if (epUrl.isNotEmpty()) {
-                    // PERBAIKAN: Menggunakan newEpisode()
                     newEpisode(epUrl) {
                         this.name = epTitle
                         this.episode = epNum
@@ -91,8 +90,8 @@ class Ngefilm21 : MainAPI() {
                 this.posterUrl = poster
                 this.plot = plot
                 this.year = year
-                // PERBAIKAN: Menggunakan addScore()
-                this.addScore(Score.from10(ratingText?.toDoubleOrNull()))
+                // PERBAIKAN DI SINI: Ganti addScore() dengan assignment langsung
+                this.score = Score.from10(ratingText?.toDoubleOrNull())
                 this.tags = tags
             }
         } else {
@@ -100,8 +99,8 @@ class Ngefilm21 : MainAPI() {
                 this.posterUrl = poster
                 this.plot = plot
                 this.year = year
-                // PERBAIKAN: Menggunakan addScore()
-                this.addScore(Score.from10(ratingText?.toDoubleOrNull()))
+                // PERBAIKAN DI SINI: Ganti addScore() dengan assignment langsung
+                this.score = Score.from10(ratingText?.toDoubleOrNull())
                 this.tags = tags
             }
         }
