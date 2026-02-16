@@ -47,7 +47,15 @@ class NgeFilmProvider : MainAPI() {
         val titleElement = this.selectFirst("h2.entry-title a") ?: return null
         val title = titleElement.text().trim()
         val href = fixUrl(titleElement.attr("href"))
-        val posterUrl = fixUrl(this.select("img").attr("src"))
+        
+        // FIX POSTER: Cek data-src dulu (Lazy Load), baru src
+        val img = this.selectFirst("img")
+        var posterUrl = img?.attr("data-src")
+        if (posterUrl.isNullOrEmpty()) {
+            posterUrl = img?.attr("src")
+        }
+        posterUrl = fixUrl(posterUrl ?: "")
+
         val quality = this.select(".gmr-quality-item").text().trim()
 
         return newMovieSearchResponse(title, href, TvType.Movie) {
@@ -65,17 +73,30 @@ class NgeFilmProvider : MainAPI() {
         }
     }
 
+    @Suppress("DEPRECATION")
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
 
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: "Unknown"
-        val poster = document.selectFirst("div.gmr-movie-view img")?.attr("src") 
-            ?: document.selectFirst(".content-thumbnail img")?.attr("src")
+        
+        // FIX POSTER DETAIL: Prioritaskan meta og:image (paling HD), lalu data-src, lalu src
+        var poster = document.selectFirst("meta[property=og:image]")?.attr("content")
+        
+        if (poster.isNullOrEmpty()) {
+             val imgElement = document.selectFirst("div.gmr-movie-view img") 
+                ?: document.selectFirst(".content-thumbnail img")
+             
+             poster = imgElement?.attr("data-src")
+             if (poster.isNullOrEmpty()) {
+                 poster = imgElement?.attr("src")
+             }
+        }
+        poster = fixUrl(poster ?: "")
         
         val description = document.select("div.entry-content p").text().trim()
         val year = document.select("span:contains(Tahun Rilis) a").text().toIntOrNull()
         
-        // CATATAN: Rating dihapus total biar tidak error build
+        // Rating dihapus biar gak error build
         
         val tags = document.select("span:contains(Genre) a").map { it.text() }
         val trailer = document.select("a.gmr-trailer-popup").attr("href")
