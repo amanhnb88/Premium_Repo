@@ -95,7 +95,6 @@ class Ngefilm21 : MainAPI() {
         return response
     }
 
-    // --- BAGIAN INI YANG CANGGIH (MATA TUHAN V20) ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -104,7 +103,7 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // 1. SCAN IFRAME (Termasuk LiteSpeed)
+        // 1. SCAN IFRAME UTAMA
         document.select("iframe").forEach { iframe ->
             var src = iframe.attr("data-litespeed-src")
             if (src.isEmpty()) src = iframe.attr("data-src")
@@ -112,11 +111,9 @@ class Ngefilm21 : MainAPI() {
             
             val fixedSrc = fixUrl(src)
             if (isValidLink(fixedSrc)) {
-                // JIKA LINK ADALAH RPMLIVE, KITA BONGKAR MANUAL
                 if (fixedSrc.contains("rpmlive.online")) {
                     resolveRpmlive(fixedSrc, data, subtitleCallback, callback)
                 } else {
-                    // Link biasa, biarkan Cloudstream menangani
                     loadExtractor(fixedSrc, data, subtitleCallback, callback)
                 }
             }
@@ -171,7 +168,7 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
-    // --- FUNGSI KHUSUS MEMBONGKAR RPMLIVE ---
+    // --- FUNGSI FIXED: MENGGUNAKAN NEWEXTRACTORLINK ---
     private suspend fun resolveRpmlive(
         url: String, 
         referer: String, 
@@ -179,34 +176,30 @@ class Ngefilm21 : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // 1. Buka halaman player (bukan video) dengan Referer asli
             val response = app.get(
                 url, 
                 headers = mapOf("Referer" to referer, "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
             ).text
 
-            // 2. Cari file .m3u8 atau .mp4 di dalam kode sumbernya menggunakan Regex
-            // Pola umum: file: "https://..." atau source: "https://..."
             val m3u8Regex = Regex("""(https?://[^"']+\.m3u8[^"']*)""")
             val m3u8Match = m3u8Regex.find(response)
 
             if (m3u8Match != null) {
                 val videoUrl = m3u8Match.groupValues[1]
                 
-                // 3. Kirim link video MURNI ke player
+                // MENGGUNAKAN BUILDER TERBARU (MENGHINDARI ERROR DEPRECATED)
                 callback.invoke(
-                    ExtractorLink(
-                        name = "Ngefilm21 (VIP)",
-                        name = "Ngefilm21 (VIP)",
+                    newExtractorLink(
                         source = "Rpmlive",
+                        name = "Ngefilm21 (VIP)",
                         url = videoUrl,
-                        referer = "https://playerngefilm21.rpmlive.online/", // Referer khusus player
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = true
-                    )
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "https://playerngefilm21.rpmlive.online/"
+                        this.quality = Qualities.Unknown.value
+                    }
                 )
             } else {
-                // Jika gagal regex, coba load biasa sbg cadangan
                 loadExtractor(url, referer, subtitleCallback, callback)
             }
         } catch (e: Exception) {
