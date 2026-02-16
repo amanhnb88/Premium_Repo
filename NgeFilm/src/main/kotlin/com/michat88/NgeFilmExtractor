@@ -5,10 +5,6 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.*
 import org.jsoup.Jsoup
 
-/**
- * Custom Extractor untuk Ngefilm Player
- * Gunakan ini jika ada embed player khusus yang perlu di-handle
- */
 class NgefilmExtractor : ExtractorApi() {
     override val name = "Ngefilm Player"
     override val mainUrl = "https://new31.ngefilm.site"
