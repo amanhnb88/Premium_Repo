@@ -28,16 +28,17 @@ class NgefilmExtractor : ExtractorApi() {
                     source.attr("res") 
                 }.ifEmpty { "Auto" }
                 
-                // Fix: Gunakan ExtractorLink constructor yang benar
+                // Fix: Gunakan newExtractorLink
                 callback.invoke(
-                    ExtractorLink(
+                    newExtractorLink(
                         source = this.name,
                         name = this.name,
                         url = fixUrl(videoUrl),
-                        referer = url,
-                        quality = getQualityFromName(quality),
-                        isM3u8 = videoUrl.contains(".m3u8")
-                    )
+                        type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else null
+                    ) {
+                        this.referer = url
+                        this.quality = getQualityFromName(quality)
+                    }
                 )
             }
         }
@@ -75,14 +76,15 @@ class NgefilmExtractor : ExtractorApi() {
                     val videoUrl = match.groupValues[1]
                     if (videoUrl.isNotBlank() && videoUrl.startsWith("http")) {
                         callback.invoke(
-                            ExtractorLink(
+                            newExtractorLink(
                                 source = this.name,
                                 name = this.name,
                                 url = videoUrl,
-                                referer = url,
-                                quality = Qualities.Unknown.value,
-                                isM3u8 = videoUrl.contains(".m3u8")
-                            )
+                                type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else null
+                            ) {
+                                this.referer = url
+                                this.quality = Qualities.Unknown.value
+                            }
                         )
                     }
                 }
@@ -144,13 +146,14 @@ class NgefilmGdriveExtractor : ExtractorApi() {
             val directUrl = "https://drive.google.com/uc?id=$fileId&export=download"
             
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = this.name,
                     name = this.name,
-                    url = directUrl,
-                    referer = "https://drive.google.com/",
-                    quality = Qualities.Unknown.value
-                )
+                    url = directUrl
+                ) {
+                    this.referer = "https://drive.google.com/"
+                    this.quality = Qualities.Unknown.value
+                }
             )
             
             // Coba juga format preview
@@ -164,13 +167,14 @@ class NgefilmGdriveExtractor : ExtractorApi() {
                     val videoUrl = source.attr("src")
                     if (videoUrl.isNotBlank()) {
                         callback.invoke(
-                            ExtractorLink(
+                            newExtractorLink(
                                 source = this.name + " Preview",
                                 name = this.name,
-                                url = videoUrl,
-                                referer = previewUrl,
-                                quality = Qualities.Unknown.value
-                            )
+                                url = videoUrl
+                            ) {
+                                this.referer = previewUrl
+                                this.quality = Qualities.Unknown.value
+                            }
                         )
                     }
                 }
@@ -216,14 +220,15 @@ class NgefilmEmbedExtractor : ExtractorApi() {
             val videoUrl = video.attr("src")
             if (videoUrl.isNotBlank()) {
                 callback.invoke(
-                    ExtractorLink(
+                    newExtractorLink(
                         source = this.name,
                         name = this.name,
                         url = if (videoUrl.startsWith("//")) "https:$videoUrl" else videoUrl,
-                        referer = url,
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = videoUrl.contains(".m3u8")
-                    )
+                        type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else null
+                    ) {
+                        this.referer = url
+                        this.quality = Qualities.Unknown.value
+                    }
                 )
             }
         }
