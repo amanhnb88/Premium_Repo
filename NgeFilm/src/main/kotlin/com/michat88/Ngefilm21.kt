@@ -73,7 +73,7 @@ class Ngefilm21 : MainAPI() {
         // 2. Mengambil Genre dan Aktor
         val tags = document.select(".gmr-moviedata:contains(Genre) a").map { it.text() }
         
-        // Map Actor ke ActorData agar sesuai tipe data (Fix Error Tipe Data)
+        // Map Actor ke ActorData agar sesuai tipe data
         val actors = document.select("span[itemprop='actors'] a").mapNotNull {
             val name = it.text()
             if (name.isNotBlank()) {
@@ -81,8 +81,13 @@ class Ngefilm21 : MainAPI() {
             } else null
         }
 
-        // 3. Logika TV Series vs Movie
-        // Memfilter link episode yang valid (mengabaikan tombol 'Pilih Episode')
+        // 3. Mengambil Trailer
+        var trailerUrl = document.selectFirst("a.gmr-trailer-popup")?.attr("href")
+        if (trailerUrl == null) {
+            trailerUrl = document.selectFirst("iframe[src*='youtube.com']")?.attr("src")
+        }
+
+        // 4. Logika TV Series vs Movie
         val episodeElements = document.select(".gmr-listseries a").filter {
             it.attr("href").contains("/eps/") && !it.text().contains("Pilih", true)
         }
@@ -113,7 +118,11 @@ class Ngefilm21 : MainAPI() {
                 this.score = Score.from10(ratingText?.toDoubleOrNull())
                 this.tags = tags
                 this.actors = actors
-                // Trailer dihapus dulu agar compile sukses
+                
+                // FIX TRAILER: Tambahkan langsung ke list trailers
+                if (trailerUrl != null) {
+                    this.trailers.add(TrailerData(trailerUrl, null, false))
+                }
             }
         } else {
             return newMovieLoadResponse(title, url, type, url) {
@@ -123,7 +132,11 @@ class Ngefilm21 : MainAPI() {
                 this.score = Score.from10(ratingText?.toDoubleOrNull())
                 this.tags = tags
                 this.actors = actors
-                // Trailer dihapus dulu agar compile sukses
+                
+                // FIX TRAILER: Tambahkan langsung ke list trailers
+                if (trailerUrl != null) {
+                    this.trailers.add(TrailerData(trailerUrl, null, false))
+                }
             }
         }
     }
@@ -136,7 +149,7 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // 1. Cek Iframe langsung
+        // Cek Iframe langsung
         document.select("iframe").forEach { iframe ->
             var src = iframe.attr("src")
             if (src.startsWith("//")) src = "https:$src"
@@ -146,7 +159,7 @@ class Ngefilm21 : MainAPI() {
             }
         }
 
-        // 2. Cek Navigasi Player (AJAX)
+        // Cek Navigasi Player (AJAX)
         val serverIds = document.select(".gmr-player-nav li a").mapNotNull { 
             val postId = it.attr("data-post")
             val num = it.attr("data-nume")
