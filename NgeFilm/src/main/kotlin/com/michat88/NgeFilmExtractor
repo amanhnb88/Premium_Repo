@@ -1,0 +1,233 @@
+package com.michat88
+
+import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.*
+import org.jsoup.Jsoup
+
+/**
+ * Custom Extractor untuk Ngefilm Player
+ * Gunakan ini jika ada embed player khusus yang perlu di-handle
+ */
+class NgefilmExtractor : ExtractorApi() {
+    override val name = "Ngefilm Player"
+    override val mainUrl = "https://new31.ngefilm.site"
+    override val requiresReferer = true
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val document = app.get(url, referer = referer).document
+        
+        // Extract video sources dari player
+        document.select("video source, source[type*=video]").forEach { source ->
+            val videoUrl = source.attr("src")
+            if (videoUrl.isNotBlank()) {
+                val quality = source.attr("label").ifEmpty { 
+                    source.attr("res") 
+                }.ifEmpty { "Auto" }
+                
+                callback.invoke(
+                    ExtractorLink(
+                        this.name,
+                        this.name,
+                        fixUrl(videoUrl),
+                        referer = url,
+                        quality = getQualityFromName(quality),
+                        isM3u8 = videoUrl.contains(".m3u8")
+                    )
+                )
+            }
+        }
+        
+        // Extract subtitle tracks
+        document.select("track[kind=subtitles], track[kind=captions]").forEach { track ->
+            val subUrl = track.attr("src")
+            val subLang = track.attr("label").ifEmpty { 
+                track.attr("srclang") 
+            }
+            if (subUrl.isNotBlank()) {
+                subtitleCallback.invoke(
+                    SubtitleFile(
+                        lang = subLang.ifEmpty { "Indonesian" },
+                        url = fixUrl(subUrl)
+                    )
+                )
+            }
+        }
+        
+        // Cari dari JavaScript variables
+        document.select("script").forEach { script ->
+            val scriptContent = script.html()
+            
+            // Pattern untuk mencari sumber video di JavaScript
+            val sourcePatterns = listOf(
+                Regex("""sources?\s*:\s*\[?\s*[{]?\s*["']?file["']?\s*:\s*["']([^"']+)["']"""),
+                Regex("""["']?file["']?\s*:\s*["']([^"']+\.m3u8[^"']*)["']"""),
+                Regex("""["']?file["']?\s*:\s*["']([^"']+\.mp4[^"']*)["']"""),
+                Regex("""src\s*:\s*["']([^"']+)["']"""),
+            )
+            
+            sourcePatterns.forEach { pattern ->
+                pattern.findAll(scriptContent).forEach { match ->
+                    val videoUrl = match.groupValues[1]
+                    if (videoUrl.isNotBlank() && videoUrl.startsWith("http")) {
+                        callback.invoke(
+                            ExtractorLink(
+                                this.name,
+                                this.name,
+                                videoUrl,
+                                referer = url,
+                                quality = Qualities.Unknown.value,
+                                isM3u8 = videoUrl.contains(".m3u8")
+                            )
+                        )
+                    }
+                }
+            }
+            
+            // Pattern untuk subtitle
+            val subPattern = Regex("""tracks?\s*:\s*\[([^\]]+)\]""")
+            subPattern.find(scriptContent)?.groupValues?.get(1)?.let { tracksJson ->
+                val trackPattern = Regex("""["']?file["']?\s*:\s*["']([^"']+)["'][^}]*["']?label["']?\s*:\s*["']([^"']+)["']""")
+                trackPattern.findAll(tracksJson).forEach { trackMatch ->
+                    val subUrl = trackMatch.groupValues[1]
+                    val subLabel = trackMatch.groupValues[2]
+                    if (subUrl.isNotBlank()) {
+                        subtitleCallback.invoke(
+                            SubtitleFile(
+                                lang = subLabel,
+                                url = subUrl
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+    
+    private fun getQualityFromName(quality: String?): Int {
+        return when (quality?.lowercase()) {
+            "4k", "2160p" -> Qualities.P2160.value
+            "1440p", "2k" -> Qualities.P1440.value
+            "1080p", "fullhd", "full hd" -> Qualities.P1080.value
+            "720p", "hd" -> Qualities.P720.value
+            "480p" -> Qualities.P480.value
+            "360p" -> Qualities.P360.value
+            else -> Qualities.Unknown.value
+        }
+    }
+}
+
+/**
+ * Google Drive Extractor untuk Ngefilm
+ * Untuk menangani link Google Drive yang di-embed
+ */
+class NgefilmGdriveExtractor : ExtractorApi() {
+    override val name = "Gdrive Ngefilm"
+    override val mainUrl = "https://drive.google.com"
+    override val requiresReferer = false
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        // Extract file ID dari berbagai format Google Drive URL
+        val fileId = Regex("""/file/d/([^/]+)|id=([^&]+)|/open\?id=([^&]+)""")
+            .find(url)?.groupValues?.firstOrNull { it.isNotEmpty() && it != url }
+        
+        if (fileId != null) {
+            // Format direct download link
+            val directUrl = "https://drive.google.com/uc?id=$fileId&export=download"
+            
+            callback.invoke(
+                ExtractorLink(
+                    this.name,
+                    this.name,
+                    directUrl,
+                    referer = "https://drive.google.com/",
+                    quality = Qualities.Unknown.value
+                )
+            )
+            
+            // Coba juga format preview
+            val previewUrl = "https://drive.google.com/file/d/$fileId/preview"
+            
+            try {
+                val doc = app.get(previewUrl).document
+                
+                // Cari video source di preview page
+                doc.select("video source").forEach { source ->
+                    val videoUrl = source.attr("src")
+                    if (videoUrl.isNotBlank()) {
+                        callback.invoke(
+                            ExtractorLink(
+                                this.name + " Preview",
+                                this.name,
+                                videoUrl,
+                                referer = previewUrl,
+                                quality = Qualities.Unknown.value
+                            )
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore preview extraction errors
+            }
+        }
+    }
+}
+
+/**
+ * Extractor untuk player embed umum yang sering digunakan
+ */
+class NgefilmEmbedExtractor : ExtractorApi() {
+    override val name = "Ngefilm Embed"
+    override val mainUrl = "https://embed.ngefilm.site"
+    override val requiresReferer = true
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val document = app.get(url, referer = referer).document
+        
+        // Cari semua iframe di halaman
+        document.select("iframe").forEach { iframe ->
+            val iframeUrl = iframe.attr("src")
+            if (iframeUrl.isNotBlank()) {
+                // Recursively load extractor untuk nested iframes
+                loadExtractor(
+                    if (iframeUrl.startsWith("//")) "https:$iframeUrl" else iframeUrl,
+                    mainUrl,
+                    subtitleCallback,
+                    callback
+                )
+            }
+        }
+        
+        // Direct video extraction
+        document.select("video, video source").forEach { video ->
+            val videoUrl = video.attr("src")
+            if (videoUrl.isNotBlank()) {
+                callback.invoke(
+                    ExtractorLink(
+                        this.name,
+                        this.name,
+                        if (videoUrl.startsWith("//")) "https:$videoUrl" else videoUrl,
+                        referer = url,
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = videoUrl.contains(".m3u8")
+                    )
+                )
+            }
+        }
+    }
+}
