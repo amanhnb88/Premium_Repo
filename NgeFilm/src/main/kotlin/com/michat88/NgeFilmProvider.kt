@@ -1,149 +1,116 @@
 package com.michat88
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
 
 class NgefilmProvider : MainAPI() {
     override var mainUrl = "https://new31.ngefilm.site"
-    override var name = "Ngefilm"
+    override var name = "Ngefilm21"
+    override val hasQuickSearch = false
     override val hasMainPage = true
     override var lang = "id"
     override val hasDownloadSupport = true
+
     override val supportedTypes = setOf(
         TvType.Movie,
         TvType.TvSeries,
-        TvType.AsianDrama
+        TvType.Anime
     )
 
+    // Logika Home Page (Sesuai Tahap 1 Mata Tuhan)
     override val mainPage = mainPageOf(
-        "$mainUrl/page/" to "Terbaru",
-        "$mainUrl/film-terbaru/page/" to "Film Terbaru",
-        "$mainUrl/drama-korea/page/" to "Drama Korea",
-        "$mainUrl/series/page/" to "Series",
-        "$mainUrl/genre/action/page/" to "Action",
-        "$mainUrl/genre/adventure/page/" to "Adventure",
-        "$mainUrl/genre/comedy/page/" to "Comedy",
-        "$mainUrl/genre/crime/page/" to "Crime",
-        "$mainUrl/genre/drama/page/" to "Drama",
-        "$mainUrl/genre/horror/page/" to "Horror",
-        "$mainUrl/genre/romance/page/" to "Romance",
-        "$mainUrl/genre/thriller/page/" to "Thriller"
+        "$mainUrl/page/" to "Film Terbaru",
+        "$mainUrl/genre/live-streaming/page/" to "Live Streaming",
+        "$mainUrl/country/korea/page/" to "Drama Korea",
+        "$mainUrl/country/indonesia/page/" to "Indonesia",
+        "$mainUrl/country/usa/page/" to "Barat (USA)",
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get(request.data + page).document
-        val home = document.select("article.item").mapNotNull {
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
+        val url = request.data + page
+        val document = app.get(url).document
+        val home = document.select("article.item-list").mapNotNull {
             it.toSearchResult()
         }
         return newHomePageResponse(request.name, home)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst("h2.entry-title a")?.text()?.trim() ?: return null
-        val href = fixUrl(this.selectFirst("a")?.attr("href") ?: return null)
-        val posterUrl = fixUrlNull(this.selectFirst("img")?.attr("src"))
-        val quality = this.selectFirst(".gmr-quality-item a")?.text()
-        val type = if (this.selectFirst(".gmr-duration-item")?.text()?.contains("Season", true) == true 
-            || href.contains("/series/")) TvType.TvSeries else TvType.Movie
+        val titleElement = this.selectFirst("h2.entry-title a") ?: return null
+        val title = titleElement.text().trim()
+        val href = fixUrl(titleElement.attr("href"))
+        val posterUrl = fixUrl(this.select("img").attr("src"))
+        val quality = this.select(".gmr-quality-item").text().trim()
 
-        return if (type == TvType.TvSeries) {
-            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-                this.posterUrl = posterUrl
-                this.quality = getQualityFromString(quality)
-            }
-        } else {
-            newMovieSearchResponse(title, href, TvType.Movie) {
-                this.posterUrl = posterUrl
-                this.quality = getQualityFromString(quality)
-            }
+        return newMovieSearchResponse(title, href, TvType.Movie) {
+            this.posterUrl = posterUrl
+            addQuality(quality)
         }
     }
 
+    // Logika Search (Sesuai Tahap 2 Mata Tuhan)
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/?s=$query").document
-        return document.select("article.item").mapNotNull {
+        val url = "$mainUrl/?s=$query&post_type[]=post&post_type[]=tv"
+        val document = app.get(url).document
+        return document.select("article.item-list").mapNotNull {
             it.toSearchResult()
         }
     }
 
-    override suspend fun load(url: String): LoadResponse? {
+    // Logika Detail (Sesuai Tahap 3 Mata Tuhan)
+    override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
+
+        val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: "Unknown"
+        val poster = document.selectFirst("div.gmr-movie-view img")?.attr("src") 
+            ?: document.selectFirst(".content-thumbnail img")?.attr("src")
         
-        val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: return null
-        val poster = fixUrlNull(document.selectFirst(".gmr-movie-poster img")?.attr("src"))
-        val year = document.selectFirst(".gmr-movie-data:contains(Tahun) span")?.text()?.toIntOrNull()
-        val duration = document.selectFirst(".gmr-movie-data:contains(Durasi) span")?.text()
-            ?.replace("Menit", "")?.trim()?.toIntOrNull()
+        val description = document.select("div.entry-content p").text().trim()
+        val year = document.select("span:contains(Tahun Rilis) a").text().toIntOrNull()
+        val rating = document.select("div.gmr-rating-item").text().trim().replace(",", ".").toDoubleOrNull()
+        val tags = document.select("span:contains(Genre) a").map { it.text() }
+        val trailer = document.select("a.gmr-trailer-popup").attr("href")
+
+        val episodes = ArrayList<Episode>()
+        val episodeElements = document.select("div.gmr-list-series a")
         
-        // Fix: Gunakan Score API yang baru
-        val ratingValue = document.selectFirst(".gmr-movie-data:contains(Rating) span")?.text()?.toDoubleOrNull()
-        val score = Score.from10(ratingValue?.toInt())
-        
-        val plot = document.selectFirst(".entry-content[itemprop=description]")?.text()?.trim()
-        val tags = document.select(".gmr-movie-data:contains(Genre) span a").map { it.text() }
-        
-        // Ambil trailer YouTube
-        val trailerUrl = document.select("iframe[src*=youtube.com], iframe[src*=youtu.be]")
-            .firstOrNull()?.attr("src")
-        
-        // Fix: addActors hanya menerima List<Actor>
-        val actors = document.select(".gmr-movie-data:contains(Bintang) span a").map {
-            Actor(it.text())
-        }
-        
-        // Ambil rekomendasi
-        val recommendations = document.select(".gmr-related .item").mapNotNull {
-            it.toSearchResult()
-        }
-        
-        // Cek apakah series atau movie - Fix: Gunakan newEpisode method
-        val episodes = document.select(".gmr-listseries a").mapNotNull { eps ->
-            val href = fixUrl(eps.attr("href"))
-            val name = eps.text().trim()
-            
-            val episodeNum = Regex("Episode\\s*(\\d+)").find(name)?.groupValues?.get(1)?.toIntOrNull()
-            val seasonNum = Regex("Season\\s*(\\d+)").find(name)?.groupValues?.get(1)?.toIntOrNull()
-            
-            // Fix: Gunakan newEpisode method dari MainAPI
-            newEpisode(href) {
-                this.name = name
-                this.season = seasonNum
-                this.episode = episodeNum
+        if (episodeElements.isNotEmpty()) {
+            episodeElements.forEach { 
+                val epTitle = it.text()
+                val epHref = it.attr("href")
+                val epNum = Regex("Episode\\s+(\\d+)").find(epTitle)?.groupValues?.get(1)?.toIntOrNull()
+                episodes.add(newEpisode(epHref) {
+                    this.name = epTitle
+                    this.episode = epNum
+                })
             }
-        }
-        
-        return if (episodes.isNotEmpty()) {
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
+                this.plot = description
                 this.year = year
-                this.plot = plot
                 this.tags = tags
-                // Fix: Gunakan score property, bukan rating
-                this.score = score
-                this.duration = duration
-                addActors(actors)
-                addTrailer(trailerUrl)
-                this.recommendations = recommendations
+                this.rating = rating.toRatingInt()
+                addTrailer(trailer)
             }
         } else {
-            newMovieLoadResponse(title, url, TvType.Movie, url) {
+            return newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
+                this.plot = description
                 this.year = year
-                this.plot = plot
                 this.tags = tags
-                // Fix: Gunakan score property, bukan rating
-                this.score = score
-                this.duration = duration
-                addActors(actors)
-                addTrailer(trailerUrl)
-                this.recommendations = recommendations
+                this.rating = rating.toRatingInt()
+                addTrailer(trailer)
             }
         }
     }
 
+    // 🔥 LOGIKA LOAD LINKS (IMPLEMENTASI MATA TUHAN V7) 🔥
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -151,123 +118,42 @@ class NgefilmProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
+
+        // 1. Ambil semua elemen IFRAME
+        val iframes = document.select("iframe")
         
-        // Ambil semua server dari dropdown atau button
-        val servers = document.select(".gmr-server-wrap button, .gmr-embed-responsive iframe")
-        
-        servers.forEach { server ->
-            val serverUrl = server.attr("data-src").ifEmpty { 
-                server.attr("src") 
+        iframes.forEach { iframe ->
+            // 2. Cek Lazy Load (Prioritas Utama Mata Tuhan)
+            var src = iframe.attr("data-litespeed-src")
+            if (src.isEmpty()) {
+                src = iframe.attr("data-src") // Cek variasi lain
             }
-            
-            if (serverUrl.isNotBlank()) {
-                val embedUrl = if (serverUrl.startsWith("http")) {
-                    serverUrl
+            if (src.isEmpty()) {
+                src = iframe.attr("src") // Fallback ke src biasa
+            }
+
+            // Bersihkan URL
+            src = fixUrl(src)
+
+            // 3. Filter Sampah (Sesuai Logika V7)
+            val isJunk = src.contains("googletagmanager") || 
+                         src.contains("facebook.com") || 
+                         src.contains("twitter.com") || 
+                         src.contains("youtube.com") ||
+                         src.contains("about:blank")
+
+            // 4. Jika Bersih, Eksekusi!
+            if (!isJunk && src.isNotEmpty()) {
+                // Khusus untuk RPMLIVE yang ditemukan Mata Tuhan
+                if (src.contains("rpmlive")) {
+                    loadExtractor(src, "$mainUrl/", subtitleCallback, callback)
                 } else {
-                    fixUrl(serverUrl)
+                    // Load extractor umum lainnya
+                    loadExtractor(src, "$mainUrl/", subtitleCallback, callback)
                 }
-                
-                // Load server page dan extract iframe
-                loadExtractor(embedUrl, subtitleCallback, callback)
             }
         }
-        
-        // Cari juga iframe langsung di halaman
-        document.select("iframe[src*=player], iframe[src*=embed]").forEach { iframe ->
-            val iframeUrl = fixUrl(iframe.attr("src"))
-            if (iframeUrl.isNotBlank()) {
-                loadExtractor(iframeUrl, subtitleCallback, callback)
-            }
-        }
-        
+
         return true
-    }
-    
-    private suspend fun loadExtractor(
-        url: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        // Try built-in extractors
-        loadExtractor(url, mainUrl, subtitleCallback, callback)
-        
-        // Manual extraction jika perlu
-        try {
-            val doc = app.get(url).document
-            
-            // Cari video source - Fix: Gunakan newExtractorLink
-            doc.select("video source, source[type*=video]").forEach { source ->
-                val videoUrl = source.attr("src")
-                if (videoUrl.isNotBlank()) {
-                    callback.invoke(
-                        newExtractorLink(
-                            source = this.name,
-                            name = this.name,
-                            url = fixUrl(videoUrl),
-                            type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else null
-                        ) {
-                            this.referer = url
-                            this.quality = Qualities.Unknown.value
-                        }
-                    )
-                }
-            }
-            
-            // Cari subtitle tracks
-            doc.select("track[kind=subtitles], track[kind=captions]").forEach { track ->
-                val subUrl = track.attr("src")
-                val subLang = track.attr("label").ifEmpty { 
-                    track.attr("srclang") 
-                }
-                if (subUrl.isNotBlank()) {
-                    subtitleCallback.invoke(
-                        SubtitleFile(
-                            lang = subLang.ifEmpty { "Indonesian" },
-                            url = fixUrl(subUrl)
-                        )
-                    )
-                }
-            }
-            
-            // Cari dari script tags (HLS/m3u8 links)
-            doc.select("script").forEach { script ->
-                val scriptContent = script.html()
-                
-                // Pattern untuk m3u8
-                val m3u8Pattern = Regex("""["'](https?://[^"']*\.m3u8[^"']*)["']""")
-                m3u8Pattern.findAll(scriptContent).forEach { match ->
-                    val m3u8Url = match.groupValues[1]
-                    callback.invoke(
-                        newExtractorLink(
-                            source = this.name,
-                            name = this.name + " HLS",
-                            url = m3u8Url,
-                            type = ExtractorLinkType.M3U8
-                        ) {
-                            this.referer = url
-                            this.quality = Qualities.Unknown.value
-                        }
-                    )
-                }
-                
-                // Pattern untuk mp4
-                val mp4Pattern = Regex("""["'](https?://[^"']*\.mp4[^"']*)["']""")
-                mp4Pattern.findAll(scriptContent).forEach { match ->
-                    val mp4Url = match.groupValues[1]
-                    callback.invoke(
-                        newExtractorLink(
-                            source = this.name,
-                            name = this.name + " MP4",
-                            url = mp4Url
-                        ) {
-                            this.referer = url
-                            this.quality = Qualities.Unknown.value
-                        }
-                    )
-                }
-            }
-        } catch (e: Exception) {
-            // Ignore extraction errors
-        }
     }
 }
