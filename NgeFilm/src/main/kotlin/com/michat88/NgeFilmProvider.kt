@@ -65,8 +65,6 @@ class NgeFilmProvider : MainAPI() {
         }
     }
 
-    // FIX: Tambahkan suppress deprecation di sini agar build tidak gagal karena isu rating
-    @Suppress("DEPRECATION")
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
 
@@ -77,11 +75,8 @@ class NgeFilmProvider : MainAPI() {
         val description = document.select("div.entry-content p").text().trim()
         val year = document.select("span:contains(Tahun Rilis) a").text().toIntOrNull()
         
-        // Ambil rating sebagai angka desimal (misal 7.2)
-        val ratingDouble = document.select("div.gmr-rating-item").text().trim().replace(",", ".").toDoubleOrNull()
-        // Konversi ke Int skala 1000 (misal 7200) untuk sistem lama
-        val ratingInt = ratingDouble?.times(1000)?.toInt()
-
+        // CATATAN: Rating dihapus total biar tidak error build
+        
         val tags = document.select("span:contains(Genre) a").map { it.text() }
         val trailer = document.select("a.gmr-trailer-popup").attr("href")
 
@@ -106,7 +101,6 @@ class NgeFilmProvider : MainAPI() {
                 this.plot = description
                 this.year = year
                 this.tags = tags
-                this.rating = ratingInt // Warning akan diabaikan karena @Suppress
                 addTrailer(trailer)
             }
         } else {
@@ -115,7 +109,6 @@ class NgeFilmProvider : MainAPI() {
                 this.plot = description
                 this.year = year
                 this.tags = tags
-                this.rating = ratingInt // Warning akan diabaikan karena @Suppress
                 addTrailer(trailer)
             }
         }
