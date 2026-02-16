@@ -1,6 +1,7 @@
 package com.michat88
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
@@ -79,7 +80,7 @@ class NgeFilmProvider : MainAPI() {
 
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: "Unknown"
         
-        // FIX POSTER DETAIL: Prioritaskan meta og:image (paling HD), lalu data-src, lalu src
+        // --- LOGIKA POSTER & BACKGROUND (Mata Dewa) ---
         var poster = document.selectFirst("meta[property=og:image]")?.attr("content")
         
         if (poster.isNullOrEmpty()) {
@@ -93,13 +94,26 @@ class NgeFilmProvider : MainAPI() {
         }
         poster = fixUrl(poster ?: "")
         
+        // Kita pake poster HD buat background juga biar cakep
+        val backgroundPoster = poster 
+
         val description = document.select("div.entry-content p").text().trim()
         val year = document.select("span:contains(Tahun Rilis) a").text().toIntOrNull()
         
-        // Rating dihapus biar gak error build
-        
         val tags = document.select("span:contains(Genre) a").map { it.text() }
         val trailer = document.select("a.gmr-trailer-popup").attr("href")
+
+        // --- FITUR BARU: ACTORS (Daftar Artis) ---
+        // Mencari elemen yang berisi nama artis (Pemeran/Stars)
+        val actors = document.select("span:contains(Pemeran) a, span:contains(Stars) a").map {
+            ActorData(Actor(it.text(), it.attr("href")))
+        }
+
+        // --- FITUR BARU: RECOMMENDATIONS (Film Terkait) ---
+        // Mengambil film dari kolom "Related" atau "You may also like"
+        val recommendations = document.select("div.yarpp-related article, div#gmr-related-post article, div.gmr-related-post article").mapNotNull {
+            it.toSearchResult()
+        }
 
         val episodes = ArrayList<Episode>()
         val episodeElements = document.select("div.gmr-list-series a")
@@ -119,18 +133,24 @@ class NgeFilmProvider : MainAPI() {
             }
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
+                this.backgroundPosterUrl = backgroundPoster // Fitur Background
                 this.plot = description
                 this.year = year
                 this.tags = tags
                 addTrailer(trailer)
+                addActors(actors) // Fitur Actors
+                this.recommendations = recommendations // Fitur Rekomendasi
             }
         } else {
             return newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
+                this.backgroundPosterUrl = backgroundPoster // Fitur Background
                 this.plot = description
                 this.year = year
                 this.tags = tags
                 addTrailer(trailer)
+                addActors(actors) // Fitur Actors
+                this.recommendations = recommendations // Fitur Rekomendasi
             }
         }
     }
