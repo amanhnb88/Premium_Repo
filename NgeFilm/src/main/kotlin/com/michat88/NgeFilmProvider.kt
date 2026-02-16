@@ -65,6 +65,7 @@ class NgeFilmProvider : MainAPI() {
         }
     }
 
+    // FIX: Tambahkan suppress deprecation di sini agar build tidak gagal karena isu rating
     @Suppress("DEPRECATION")
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
@@ -74,12 +75,11 @@ class NgeFilmProvider : MainAPI() {
             ?: document.selectFirst(".content-thumbnail img")?.attr("src")
         
         val description = document.select("div.entry-content p").text().trim()
-        
-        // Perbaikan di sini: Ambil rating sebagai Double, jangan String.toRatingInt()
         val year = document.select("span:contains(Tahun Rilis) a").text().toIntOrNull()
-        val ratingDouble = document.select("div.gmr-rating-item").text().trim().replace(",", ".").toDoubleOrNull()
         
-        // Konversi manual ke Int skala 1000 (misal 8.5 -> 8500) untuk properti 'rating' lama
+        // Ambil rating sebagai angka desimal (misal 7.2)
+        val ratingDouble = document.select("div.gmr-rating-item").text().trim().replace(",", ".").toDoubleOrNull()
+        // Konversi ke Int skala 1000 (misal 7200) untuk sistem lama
         val ratingInt = ratingDouble?.times(1000)?.toInt()
 
         val tags = document.select("span:contains(Genre) a").map { it.text() }
@@ -106,8 +106,7 @@ class NgeFilmProvider : MainAPI() {
                 this.plot = description
                 this.year = year
                 this.tags = tags
-                // FIX: Pakai ratingInt manual
-                this.rating = ratingInt
+                this.rating = ratingInt // Warning akan diabaikan karena @Suppress
                 addTrailer(trailer)
             }
         } else {
@@ -116,8 +115,7 @@ class NgeFilmProvider : MainAPI() {
                 this.plot = description
                 this.year = year
                 this.tags = tags
-                // FIX: Pakai ratingInt manual
-                this.rating = ratingInt
+                this.rating = ratingInt // Warning akan diabaikan karena @Suppress
                 addTrailer(trailer)
             }
         }
