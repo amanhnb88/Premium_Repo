@@ -1,9 +1,9 @@
-package com.lagradost.cloudstream3.plugins
+package com.michat88
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.nodes.Element
+import org.jsoup.Jsoup // Tambahan import Jsoup
 
 class Ngefilm21 : MainAPI() {
     override var mainUrl = "https://new31.ngefilm.site"
@@ -24,7 +24,6 @@ class Ngefilm21 : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        // Mengambil "Upload Terbaru" dari homepage
         val document = app.get("$mainUrl/page/$page/").document
         val home = document.select("article.item-infinite").mapNotNull {
             it.toSearchResult()
@@ -39,19 +38,17 @@ class Ngefilm21 : MainAPI() {
         val posterUrl = this.selectFirst(".content-thumbnail img")?.getImageAttr()
         
         val quality = this.selectFirst(".gmr-quality-item a")?.text() ?: "HD"
-        val rating = this.selectFirst(".gmr-rating-item")?.text()?.trim()
+        val ratingText = this.selectFirst(".gmr-rating-item")?.text()?.trim()
 
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = posterUrl
             addQuality(quality)
-            if (rating != null) {
-                this.rating = rating.toDoubleOrNull()
-            }
+            // PERBAIKAN: Menggunakan Score.from10() bukan rating
+            this.score = Score.from10(ratingText?.toDoubleOrNull())
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        // URL Search pattern berdasarkan form di HTML
         val url = "$mainUrl/?s=$query&post_type[]=post&post_type[]=tv"
         val document = app.get(url).document
 
@@ -68,9 +65,7 @@ class Ngefilm21 : MainAPI() {
         val plot = document.selectFirst(".entry-content p")?.text()?.trim()
         val year = document.selectFirst("a[href*='/year/']")?.text()?.toIntOrNull()
         
-        // Mengambil rating
         val ratingText = document.selectFirst(".gmr-rating-item")?.text()?.trim()
-        val rating = ratingText?.toDoubleOrNull()
 
         // Menentukan tipe (Movie/Series)
         val isSeries = document.select(".gmr-listseries").isNotEmpty()
@@ -82,22 +77,22 @@ class Ngefilm21 : MainAPI() {
             val episodes = document.select(".gmr-listseries a").mapNotNull {
                 val epTitle = it.text()
                 val epUrl = it.attr("href")
-                // Parsing sederhana untuk nomor episode, bisa disesuaikan
                 val epNum = Regex("Episode\\s+(\\d+)").find(epTitle)?.groupValues?.get(1)?.toIntOrNull()
                 
                 if (epUrl.isNotEmpty()) {
-                    Episode(
-                        data = epUrl,
-                        name = epTitle,
-                        episode = epNum
-                    )
+                    // PERBAIKAN: Menggunakan newEpisode()
+                    newEpisode(epUrl) {
+                        this.name = epTitle
+                        this.episode = epNum
+                    }
                 } else null
             }
             return newTvSeriesLoadResponse(title, url, type, episodes) {
                 this.posterUrl = poster
                 this.plot = plot
                 this.year = year
-                this.rating = rating?.toInt() // CloudStream rating (0-100) atau pakai addRating
+                // PERBAIKAN: Menggunakan addScore()
+                this.addScore(Score.from10(ratingText?.toDoubleOrNull()))
                 this.tags = tags
             }
         } else {
@@ -105,7 +100,8 @@ class Ngefilm21 : MainAPI() {
                 this.posterUrl = poster
                 this.plot = plot
                 this.year = year
-                this.rating = rating?.toInt()
+                // PERBAIKAN: Menggunakan addScore()
+                this.addScore(Score.from10(ratingText?.toDoubleOrNull()))
                 this.tags = tags
             }
         }
@@ -119,27 +115,21 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // Logika ekstraksi MuviPro Standar
-        // 1. Cek iframe langsung
         document.select("iframe").forEach { iframe ->
             var src = iframe.attr("src")
             if (src.startsWith("//")) src = "https:$src"
             
-            // Hindari trailer youtube
             if (!src.contains("youtube.com") && !src.contains("wp-embedded-content")) {
                 loadExtractor(src, subtitleCallback, callback)
             }
         }
 
-        // 2. Cek tab player (MuviPro sering pakai gmr-player-nav)
         val serverIds = document.select(".gmr-player-nav li a").mapNotNull { 
             it.attr("data-post") to it.attr("data-nume") 
         }
         
-        // Jika menggunakan AJAX untuk memuat player (umum di tema ini)
         if (serverIds.isNotEmpty()) {
             serverIds.forEach { (postId, num) ->
-                // Endpoint AJAX standar MuviPro
                 val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php"
                 val formData = mapOf(
                     "action" to "muvipro_player_content",
@@ -149,13 +139,12 @@ class Ngefilm21 : MainAPI() {
                 
                 try {
                     val response = app.post(ajaxUrl, data = formData).text
-                    // Response biasanya berupa HTML yang berisi iframe
                     val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
                     if (iframeSrc.isNotEmpty()) {
                          loadExtractor(iframeSrc, subtitleCallback, callback)
                     }
                 } catch (e: Exception) {
-                    // Ignore errors on specific server loads
+                    // Ignore errors
                 }
             }
         }
