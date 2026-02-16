@@ -45,13 +45,11 @@ class Ngefilm21 : MainAPI() {
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = posterUrl
             addQuality(quality)
-            // Menggunakan Score.from10 untuk rating
             this.score = Score.from10(ratingText?.toDoubleOrNull())
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        // URL Search pattern berdasarkan form di HTML
         val url = "$mainUrl/?s=$query&post_type[]=post&post_type[]=tv"
         val document = app.get(url).document
 
@@ -70,12 +68,18 @@ class Ngefilm21 : MainAPI() {
         val year = document.selectFirst(".gmr-moviedata:contains(Tahun) a")?.text()?.trim()?.toIntOrNull()
         val ratingText = document.selectFirst("span[itemprop='ratingValue']")?.text()?.trim()
 
-        // 2. Mengambil Genre dan Aktor
+        // 2. Mengambil Genre dan Aktor (DIPERBAIKI)
         val tags = document.select(".gmr-moviedata:contains(Genre) a").map { it.text() }
-        val actors = document.select("span[itemprop='actors'] a").map { Actor(it.text()) }
+        
+        // Fix Error Actor: Map ke ActorData
+        val actors = document.select("span[itemprop='actors'] a").mapNotNull {
+            val name = it.text()
+            if (name.isNotBlank()) {
+                ActorData(Actor(name, null))
+            } else null
+        }
 
         // 3. Logika TV Series vs Movie
-        // Memfilter link episode yang valid (mengabaikan tombol 'Pilih Episode')
         val episodeElements = document.select(".gmr-listseries a").filter {
             it.attr("href").contains("/eps/") && !it.text().contains("Pilih", true)
         }
@@ -86,9 +90,7 @@ class Ngefilm21 : MainAPI() {
         if (isSeries) {
             val episodes = episodeElements.mapNotNull { element ->
                 val epUrl = element.attr("href")
-                val epText = element.text() // Contoh: "Eps1"
-                
-                // Ambil angka dari teks "Eps1" -> 1
+                val epText = element.text()
                 val epNum = Regex("(\\d+)").find(epText)?.groupValues?.get(1)?.toIntOrNull()
                 val epName = element.attr("title").removePrefix("Permalink ke ")
 
@@ -106,17 +108,16 @@ class Ngefilm21 : MainAPI() {
                 this.year = year
                 this.score = Score.from10(ratingText?.toDoubleOrNull())
                 this.tags = tags
-                this.actors = actors
+                this.actors = actors // Sekarang tipe datanya sudah benar (List<ActorData>)
             }
         } else {
-            // Untuk Movie, URL konten sama dengan URL halaman
             return newMovieLoadResponse(title, url, type, url) {
                 this.posterUrl = poster
                 this.plot = plot
                 this.year = year
                 this.score = Score.from10(ratingText?.toDoubleOrNull())
                 this.tags = tags
-                this.actors = actors
+                this.actors = actors // Sekarang tipe datanya sudah benar (List<ActorData>)
             }
         }
     }
@@ -129,18 +130,17 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // 1. Cek Iframe langsung (Metode Tradisional)
+        // Cek Iframe langsung
         document.select("iframe").forEach { iframe ->
             var src = iframe.attr("src")
             if (src.startsWith("//")) src = "https:$src"
             
-            // Filter link sampah (youtube trailer, wordpress embed)
             if (!src.contains("youtube.com") && !src.contains("wp-embedded-content")) {
                 loadExtractor(src, subtitleCallback, callback)
             }
         }
 
-        // 2. Cek Navigasi Player (Metode Tema MuviPro AJAX)
+        // Cek Navigasi Player (AJAX)
         val serverIds = document.select(".gmr-player-nav li a").mapNotNull { 
             val postId = it.attr("data-post")
             val num = it.attr("data-nume")
@@ -157,16 +157,14 @@ class Ngefilm21 : MainAPI() {
                 )
                 
                 try {
-                    // Melakukan Request POST ke server untuk mendapatkan HTML player
                     val response = app.post(ajaxUrl, data = formData).text
-                    // Parsing hasil response (biasanya berisi iframe)
                     val iframeSrc = Jsoup.parse(response).select("iframe").attr("src")
                     
                     if (iframeSrc.isNotEmpty()) {
                          loadExtractor(iframeSrc, subtitleCallback, callback)
                     }
                 } catch (e: Exception) {
-                    // Abaikan error jika satu server gagal
+                    // Abaikan error
                 }
             }
         }
