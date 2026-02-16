@@ -24,6 +24,6 @@ cloudstream {
     )
 
 
-    iconUrl = "https://klikxxi.me/wp-content/uploads/2024/02/cropped-site-icon.png"
+    iconUrl = "https://new31.ngefilm.site/wp-content/uploads/2023/08/cropped-imageedit_8_4481000408-60x60.png"
 
 }
