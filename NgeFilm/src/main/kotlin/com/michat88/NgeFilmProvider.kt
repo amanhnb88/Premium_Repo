@@ -6,7 +6,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
 
-class NgefilmProvider : MainAPI() {
+class NgeFilmProvider : MainAPI() {
     override var mainUrl = "https://new31.ngefilm.site"
     override var name = "Ngefilm21"
     override val hasQuickSearch = false
@@ -20,13 +20,13 @@ class NgefilmProvider : MainAPI() {
         TvType.Anime
     )
 
-    // Logika Home Page (Sesuai Tahap 1 Mata Tuhan)
     override val mainPage = mainPageOf(
         "$mainUrl/page/" to "Film Terbaru",
         "$mainUrl/genre/live-streaming/page/" to "Live Streaming",
         "$mainUrl/country/korea/page/" to "Drama Korea",
         "$mainUrl/country/indonesia/page/" to "Indonesia",
         "$mainUrl/country/usa/page/" to "Barat (USA)",
+        "$mainUrl/year/2024/page/" to "Rilis 2024",
     )
 
     override suspend fun getMainPage(
@@ -35,9 +35,11 @@ class NgefilmProvider : MainAPI() {
     ): HomePageResponse {
         val url = request.data + page
         val document = app.get(url).document
+        
         val home = document.select("article.item-list").mapNotNull {
             it.toSearchResult()
         }
+
         return newHomePageResponse(request.name, home)
     }
 
@@ -54,16 +56,16 @@ class NgefilmProvider : MainAPI() {
         }
     }
 
-    // Logika Search (Sesuai Tahap 2 Mata Tuhan)
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/?s=$query&post_type[]=post&post_type[]=tv"
         val document = app.get(url).document
+
         return document.select("article.item-list").mapNotNull {
             it.toSearchResult()
         }
     }
 
-    // Logika Detail (Sesuai Tahap 3 Mata Tuhan)
+    @Suppress("DEPRECATION")
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
 
@@ -72,8 +74,14 @@ class NgefilmProvider : MainAPI() {
             ?: document.selectFirst(".content-thumbnail img")?.attr("src")
         
         val description = document.select("div.entry-content p").text().trim()
+        
+        // Perbaikan di sini: Ambil rating sebagai Double, jangan String.toRatingInt()
         val year = document.select("span:contains(Tahun Rilis) a").text().toIntOrNull()
-        val rating = document.select("div.gmr-rating-item").text().trim().replace(",", ".").toDoubleOrNull()
+        val ratingDouble = document.select("div.gmr-rating-item").text().trim().replace(",", ".").toDoubleOrNull()
+        
+        // Konversi manual ke Int skala 1000 (misal 8.5 -> 8500) untuk properti 'rating' lama
+        val ratingInt = ratingDouble?.times(1000)?.toInt()
+
         val tags = document.select("span:contains(Genre) a").map { it.text() }
         val trailer = document.select("a.gmr-trailer-popup").attr("href")
 
@@ -85,17 +93,21 @@ class NgefilmProvider : MainAPI() {
                 val epTitle = it.text()
                 val epHref = it.attr("href")
                 val epNum = Regex("Episode\\s+(\\d+)").find(epTitle)?.groupValues?.get(1)?.toIntOrNull()
-                episodes.add(newEpisode(epHref) {
-                    this.name = epTitle
-                    this.episode = epNum
-                })
+                
+                episodes.add(
+                    newEpisode(epHref) {
+                        this.name = epTitle
+                        this.episode = epNum
+                    }
+                )
             }
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.plot = description
                 this.year = year
                 this.tags = tags
-                this.rating = rating.toRatingInt()
+                // FIX: Pakai ratingInt manual
+                this.rating = ratingInt
                 addTrailer(trailer)
             }
         } else {
@@ -104,13 +116,13 @@ class NgefilmProvider : MainAPI() {
                 this.plot = description
                 this.year = year
                 this.tags = tags
-                this.rating = rating.toRatingInt()
+                // FIX: Pakai ratingInt manual
+                this.rating = ratingInt
                 addTrailer(trailer)
             }
         }
     }
 
-    // 🔥 LOGIKA LOAD LINKS (IMPLEMENTASI MATA TUHAN V7) 🔥
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -119,36 +131,29 @@ class NgefilmProvider : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // 1. Ambil semua elemen IFRAME
         val iframes = document.select("iframe")
         
         iframes.forEach { iframe ->
-            // 2. Cek Lazy Load (Prioritas Utama Mata Tuhan)
             var src = iframe.attr("data-litespeed-src")
             if (src.isEmpty()) {
-                src = iframe.attr("data-src") // Cek variasi lain
+                src = iframe.attr("data-src")
             }
             if (src.isEmpty()) {
-                src = iframe.attr("src") // Fallback ke src biasa
+                src = iframe.attr("src")
             }
 
-            // Bersihkan URL
             src = fixUrl(src)
 
-            // 3. Filter Sampah (Sesuai Logika V7)
             val isJunk = src.contains("googletagmanager") || 
                          src.contains("facebook.com") || 
                          src.contains("twitter.com") || 
                          src.contains("youtube.com") ||
                          src.contains("about:blank")
 
-            // 4. Jika Bersih, Eksekusi!
             if (!isJunk && src.isNotEmpty()) {
-                // Khusus untuk RPMLIVE yang ditemukan Mata Tuhan
                 if (src.contains("rpmlive")) {
                     loadExtractor(src, "$mainUrl/", subtitleCallback, callback)
                 } else {
-                    // Load extractor umum lainnya
                     loadExtractor(src, "$mainUrl/", subtitleCallback, callback)
                 }
             }
