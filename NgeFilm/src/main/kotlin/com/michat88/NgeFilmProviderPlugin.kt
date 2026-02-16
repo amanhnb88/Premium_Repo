@@ -5,8 +5,9 @@ import com.lagradost.cloudstream3.plugins.Plugin
 import android.content.Context
 
 @CloudstreamPlugin
-class NgefilmPlugin: Plugin() {
+class NgeFilmProviderPlugin: Plugin() {
     override fun load(context: Context) {
-        registerMainAPI(NgefilmProvider())
+        // FIX: Menggunakan NgeFilmProvider (Huruf F Besar) sesuai nama class di file sebelah
+        registerMainAPI(NgeFilmProvider())
     }
 }
