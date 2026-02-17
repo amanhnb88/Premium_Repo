@@ -146,11 +146,8 @@ class Ngefilm21 : MainAPI() {
         val document = app.get(data).document
 
         // 1. Cari Player RPM Live (Prioritas Utama sesuai Screenshot)
-        // Kita mencari iframe yang src-nya mengandung 'rpmlive.online'
         document.select("iframe[src*='rpmlive.online']").forEach { iframe ->
             val src = iframe.attr("src")
-            // Ekstrak ID dari URL. Biasanya setelah '#' atau '?id='
-            // Contoh URL dari screenshot: https://playerngefilm21.rpmlive.online/#ytw8o9 atau ?id=ytw8o9
             val id = if (src.contains("?id=")) {
                 src.substringAfter("?id=").substringBefore("&")
             } else if (src.contains("#")) {
@@ -171,7 +168,7 @@ class Ngefilm21 : MainAPI() {
             
             if (!fixedSrc.contains("youtube.com") && 
                 !fixedSrc.contains("wp-embedded-content") && 
-                !fixedSrc.contains("rpmlive.online")) { // Hindari double load RPM
+                !fixedSrc.contains("rpmlive.online")) { 
                 loadExtractor(fixedSrc, subtitleCallback, callback)
             }
         }
@@ -191,54 +188,37 @@ class Ngefilm21 : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // Panggil API sesuai screenshot 2
             val apiUrl = "$RPM_PLAYER_API?id=$id"
             val response = app.get(apiUrl, referer = "$mainUrl/").text
-
-            // Coba parsing JSON. Jika response terenkripsi, biasanya ada field 'data' atau strukturnya berbeda.
-            // Namun, berdasarkan info "Kunci AES", kemungkinan besar response API ini berisi data terenkripsi
-            // atau URL stream ada di dalamnya dan perlu didekripsi.
             
-            // Asumsi: Response adalah JSON yang berisi data terenkripsi atau URL langsung.
-            // Kita coba dekripsi jika response terlihat acak/encrypted, atau parsing jika JSON biasa.
-            
-            // Skenario A: API mengembalikan JSON dengan field data terenkripsi
-            // Skenario B: API mengembalikan JSON berisi link m3u8 langsung (jika player sudah handle auth)
-            
-            // Mari kita coba parsing sebagai RpmResponse dulu
             val json = AppUtils.parseJson<RpmResponse>(response)
             
-            // Jika ada link m3u8 langsung
+            // PERBAIKAN DI SINI: Menggunakan newExtractorLink
             if (!json.file.isNullOrEmpty()) {
                 callback.invoke(
-                    ExtractorLink(
-                        "RPM Live",
-                        "RPM Live (Auto)",
-                        json.file,
-                        "",
-                        getQualityFromName("HD"),
-                        true
-                    )
+                    newExtractorLink(
+                        source = "RPM Live",
+                        name = "RPM Live (Auto)",
+                        url = json.file,
+                        type = ExtractorLinkType.M3U8 // Tentukan tipe M3U8 di sini
+                    ) {
+                        this.referer = "" // Atau "$mainUrl/" jika dibutuhkan
+                        this.quality = getQualityFromName("HD")
+                    }
                 )
             } 
-            // Jika tidak ada link file, mungkin datanya terenkripsi di field lain?
-            // (Disini saya tambahkan logika umum, jika nanti butuh dekripsi payload JSON)
             
         } catch (e: Exception) {
-            // Error handling
             e.printStackTrace()
         }
     }
     
-    // Model Data untuk Response API RPM Live
     data class RpmResponse(
         @JsonProperty("file") val file: String? = null,
         @JsonProperty("label") val label: String? = null,
         @JsonProperty("type") val type: String? = null
     )
 
-    // Fungsi Dekripsi AES (Sesuai Screenshot 1)
-    // Digunakan jika nanti payload API ternyata terenkripsi penuh (bukan JSON biasa)
     private fun decryptAES(encrypted: String): String {
         try {
             val keySpec = SecretKeySpec(AES_KEY.toByteArray(), "AES")
@@ -246,8 +226,6 @@ class Ngefilm21 : MainAPI() {
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             
             cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
-            // Asumsi input encrypted adalah Base64 atau Hex. Biasanya Base64.
-            // Jika hex, perlu konversi hex to byte dulu.
             val decodedBytes = android.util.Base64.decode(encrypted, android.util.Base64.DEFAULT)
             val decrypted = cipher.doFinal(decodedBytes)
             
