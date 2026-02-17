@@ -183,8 +183,9 @@ class Ngefilm21 : MainAPI() {
                     val file = source.file ?: return@forEach
                     val label = source.label ?: "Auto"
                     
+                    // PERBAIKAN: Menggunakan newExtractorLink menggantikan constructor usang
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             source = "Ngefilm VIP",
                             name = "Ngefilm VIP $label",
                             url = file,
@@ -219,7 +220,6 @@ class Ngefilm21 : MainAPI() {
             cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
             
             // API mengembalikan data dalam format Hex string, bukan Base64 standar
-            // Jika gagal decodeHex, coba Base64. Tapi log menunjukkan hex stream (d9f130...)
             val encryptedBytes = hexToBytes(encrypted)
             val decryptedBytes = cipher.doFinal(encryptedBytes)
             
