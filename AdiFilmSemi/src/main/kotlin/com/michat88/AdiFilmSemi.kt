@@ -91,53 +91,62 @@ open class AdiFilmSemi : TmdbProvider() {
 
     }
 
-    // 15 Kategori Spesifik: Softcore, No Comedy, No Anime, No Family, High Quality Posters
+        // Main Page Revisi: Fix Kategori Kosong, No Comedy, No Anime, Poster Wajib Ada (Vote >= 2)
     override val mainPage = mainPageOf(
-        // 1. Vivamax Movie (Tagalog - The Gold Standard for Softcore)
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=tl&with_genres=10749,18&without_genres=16,35,10751&primary_release_date.gte=2016-01-01&sort_by=release_date.desc&vote_count.gte=10" to "Vivamax Movie (Hot New)",
-        
-        // 2. Vivamax Series (Official Company ID)
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_companies=149142&without_genres=16,35,10751&first_air_date.gte=2016-01-01&sort_by=first_air_date.desc&vote_count.gte=10" to "Vivamax Series (Uncut)",
-        
-        // 3. Global Softcore Movies (Strict Keyword: Softcore/Erotica)
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_keywords=155477|190370&without_genres=16,35,10751&primary_release_date.gte=2016-01-01&sort_by=release_date.desc&vote_count.gte=10" to "Global Softcore Collection",
-        
-        // 4. Japanese Unfaithful Wife (Keyword: Adultery + Japan)
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=ja&with_keywords=9834|176046&without_genres=16,35,10751&primary_release_date.gte=2016-01-01&sort_by=release_date.desc&vote_count.gte=10" to "Japanese Unfaithful Wife",
-        
-        // 5. Japanese Softcore (Pinku Style - Keyword: Eroticism + Romance)
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=ja&with_genres=10749&with_keywords=190370&without_genres=16,35,10751&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=10" to "Japanese Softcore Romance",
-        
-        // 6. Korean Erotic & Affairs (Korea + Infidelity/Sexual Obsession)
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=ko&with_keywords=156094|9834|176046&without_genres=16,35,10751&primary_release_date.gte=2016-01-01&sort_by=release_date.desc&vote_count.gte=10" to "Korean Erotic & Affairs",
-        
-        // 7. Western Erotic Thrillers (Thriller + Romance/Erotica - No Action/SciFi)
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=53,10749&without_genres=16,35,10751,28,878,12&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=20" to "Western Erotic Thrillers",
-        
-        // 8. French Passion (France + Eroticism/Seduction)
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=fr&with_keywords=190370|176046&without_genres=16,35,10751&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=10" to "French Passion & Seduction",
-        
-        // 9. Spanish & Latino Heat (Spain + Romance + Drama)
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=es&with_genres=10749,18&without_genres=16,35,10751&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=10" to "Spanish & Latino Heat",
-        
-        // 10. Thai Erotic Drama (Thailand + Romance - Strictly No Comedy)
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=th&with_genres=10749&without_genres=16,35,10751,28&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=10" to "Thai Erotic Drama",
-        
-        // 11. Chinese/Taiwanese Romance (Mandarin + Romance - No Action/Fantasy)
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=zh&with_genres=10749,18&without_genres=16,35,10751,14,28&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=10" to "Chinese & Taiwan Romance",
-        
-        // 12. Italian Seduction (Italy + Erotic/Romance)
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=it&with_genres=10749&with_keywords=190370&without_genres=16,35,10751&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=10" to "Italian Seduction",
-        
-        // 13. Forbidden Love (Keyword: Taboo/Affair - Global)
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_keywords=176046|236466&without_genres=16,35,10751&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=10" to "Forbidden Love (Global)",
-        
-        // 14. Top Rated Erotic Drama (Quality over Quantity)
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=10749,18&with_keywords=190370&without_genres=16,35,10751&primary_release_date.gte=2016-01-01&sort_by=vote_average.desc&vote_count.gte=50" to "Top Rated Erotic Drama",
-        
-        // 15. Trending Niche (Filtered Trending)
-        "$tmdbAPI/trending/movie/week?api_key=$apiKey&with_genres=10749&without_genres=16,35,10751,28,12" to "Trending Romance & Drama"
+        // 1. Vivamax Movie (Tagalog - Tetap Paling Mantap)
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=tl&with_genres=10749,18&without_genres=16,35,10751&primary_release_date.gte=2016-01-01&sort_by=release_date.desc&vote_count.gte=2" to "Vivamax Movie (New)",
+
+        // 2. Vivamax Series (Official Company)
+        "$tmdbAPI/discover/tv?api_key=$apiKey&with_companies=149142&without_genres=16,35,10751&first_air_date.gte=2016-01-01&sort_by=first_air_date.desc&vote_count.gte=2" to "Vivamax Series (Uncut)",
+
+        // 3. Global Erotic Thrillers (Pengganti Softcore Global - Lebih banyak isi)
+        // Gabungan Romance (10749) + Thriller (53) biasanya isinya film selingkuh/obsesi.
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=10749,53&without_genres=16,35,10751,28,878,12&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=5" to "Global Erotic Thrillers",
+
+        // 4. Japanese Mature Romance (Pengganti Unfaithful Wife yg kosong)
+        // Hapus keyword, fokus ke Romance Drama Jepang tanpa Komedi.
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=ja&with_genres=10749,18&without_genres=16,35,10751,28,14&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=2" to "Japanese Mature Romance",
+
+        // 5. Japanese Pinku Style (Pengganti Softcore yg kosong)
+        // Fokus murni Romance Jepang, urutkan dari yang terbaru.
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=ja&with_genres=10749&without_genres=16,35,10751,18&primary_release_date.gte=2016-01-01&sort_by=release_date.desc&vote_count.gte=2" to "Japanese Pinku Style",
+
+        // 6. Korean Intense Drama (Pengganti Erotic yg kosong)
+        // Korea Romance + Thriller atau Drama Berat.
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=ko&with_genres=10749,18&without_genres=16,35,10751,28&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=5" to "Korean Intense Drama",
+
+        // 7. Western Affair Stories (Barat)
+        // Drama Romance tanpa aksi/scifi.
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=en&with_genres=10749,18&without_genres=16,35,10751,28,878,12&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=10" to "Western Affair Stories",
+
+        // 8. French Passion (Perancis)
+        // Perancis rajanya film romance "nakal".
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=fr&with_genres=10749&without_genres=16,35,10751&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=5" to "French Passion & Seduction",
+
+        // 9. Spanish Heat (Spanyol)
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=es&with_genres=10749&without_genres=16,35,10751&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=5" to "Spanish & Latino Heat",
+
+        // 10. Thai Erotic Drama (Thailand)
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=th&with_genres=10749&without_genres=16,35,10751,28&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=2" to "Thai Erotic Drama",
+
+        // 11. Chinese Romance (Mandarin)
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=zh&with_genres=10749,18&without_genres=16,35,10751,14,28&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=5" to "Chinese & Taiwan Romance",
+
+        // 12. Italian Seduction (Italia - Fix Kosong)
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=it&with_genres=10749&without_genres=16,35,10751&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=2" to "Italian Seduction",
+
+        // 13. Forbidden Love (Global - Fix Kosong)
+        // Menggunakan Genre Drama (18) + Romance (10749) saja agar hasil banyak, tapi filter ketat komedi.
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=18,10749&without_genres=16,35,10751,28,12,878&primary_release_date.gte=2016-01-01&sort_by=popularity.desc&vote_count.gte=10" to "Forbidden Love (Global)",
+
+        // 14. Top Rated Romance (High Quality - Fix Kosong)
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=10749&without_genres=16,35,10751&primary_release_date.gte=2016-01-01&sort_by=vote_average.desc&vote_count.gte=50" to "Top Rated Romance Drama",
+
+        // 15. Popular Romance This Year (Fix Trending yang Error)
+        // Trending API tidak bisa filter genre, jadi kita pakai Discover sort popularity
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=10749&without_genres=16,35,10751&primary_release_date.gte=2023-01-01&sort_by=popularity.desc" to "Popular Romance (Hot)"
     )
+
 
 
 
