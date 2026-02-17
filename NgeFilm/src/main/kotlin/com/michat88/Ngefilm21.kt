@@ -6,7 +6,6 @@ import org.jsoup.nodes.Element
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import com.fasterxml.jackson.annotation.JsonProperty
 import java.util.UUID
 
 class Ngefilm21 : MainAPI() {
@@ -169,50 +168,43 @@ class Ngefilm21 : MainAPI() {
             // LANGKAH 1: Ambil Info Terenkripsi
             val infoUrl = "$RPM_BASE_API/info?id=$videoId"
             val infoResponse = app.get(infoUrl, headers = commonHeaders)
-            val sessionCookies = infoResponse.cookies
+            
+            // Simpan Cookies secara manual untuk dipakai di request berikutnya
+            val cookiesMap = infoResponse.cookies
             
             val rawInfoHex = infoResponse.text.replace(Regex("[^0-9a-fA-F]"), "")
             val decryptedInfo = decryptHexAES(rawInfoHex)
             
-            val infoJson = AppUtils.parseJson<InfoResponse>(decryptedInfo)
-            val playerId = infoJson.playerId ?: return 
+            // Ambil playerId menggunakan Regex (Lebih aman daripada parse JSON)
+            val playerIdMatch = Regex(""""playerId"\s*:\s*"([^"]+)"""").find(decryptedInfo)
+            val playerId = playerIdMatch?.groupValues?.get(1) ?: return 
 
-            // LANGKAH 2: BUAT TOKEN JSON MANUAL (Perbaikan di sini)
+            // LANGKAH 2: BUAT TOKEN JSON MANUAL
             val sessionId = UUID.randomUUID().toString()
             val userId = generateRandomString(4)
             
-            // Kita rakit string JSON secara manual untuk menghindari error 'Unresolved reference toJson'
             val jsonString = "{\"website\":\"new31.ngefilm.site\",\"playing\":true,\"sessionId\":\"$sessionId\",\"userId\":\"$userId\",\"playerId\":\"$playerId\",\"videoId\":\"$videoId\",\"country\":\"ID\",\"platform\":\"Mobile\",\"browser\":\"ChromiumBase\",\"os\":\"Android\"}"
 
             // Enkripsi JSON manual tadi
             val tokenHex = encryptAES(jsonString)
 
             // LANGKAH 3: Kirim Token Buatan Kita ke /player
+            // Gunakan cookies yang tadi kita simpan
             val playerUrl = "$RPM_BASE_API/player?t=$tokenHex"
-            val encryptedResponse = app.get(playerUrl, headers = commonHeaders, cookies = sessionCookies).text.replace(Regex("[^0-9a-fA-F]"), "")
+            val encryptedResponse = app.get(playerUrl, headers = commonHeaders, cookies = cookiesMap).text.replace(Regex("[^0-9a-fA-F]"), "")
 
             // LANGKAH 4: Dekripsi respons akhir
             val decryptedFinal = decryptHexAES(encryptedResponse)
             
             if (decryptedFinal.isNotEmpty()) {
-                var streamUrl = ""
+                // Cari URL m3u8 menggunakan Regex (Menangkap parameter ?v=... juga)
+                // Pola: "https://... .m3u8 ... "
+                val linkRegex = Regex("""(https?:\/\/[^"']+\.m3u8[^"']*)""")
+                val linkMatch = linkRegex.find(decryptedFinal)
                 
-                // Coba Parse JSON
-                try {
-                    val json = AppUtils.parseJson<RpmResponse>(decryptedFinal)
-                    streamUrl = json.file ?: json.link ?: json.source ?: ""
-                } catch (e: Exception) {}
-
-                // Coba Regex (Backup)
-                if (streamUrl.isEmpty()) {
-                    val linkRegex = Regex("""(https?:\/\/[^"']+\.m3u8[^"']*)""")
-                    val linkMatch = linkRegex.find(decryptedFinal)
-                    if (linkMatch != null) {
-                        streamUrl = linkMatch.groupValues[1].replace("\\/", "/")
-                    }
-                }
-
-                if (streamUrl.isNotEmpty()) {
+                if (linkMatch != null) {
+                    val streamUrl = linkMatch.groupValues[1].replace("\\/", "/") // Fix slash ter-escape
+                    
                     callback.invoke(
                         newExtractorLink(
                             source = "RPM Live",
@@ -231,16 +223,6 @@ class Ngefilm21 : MainAPI() {
             e.printStackTrace()
         }
     }
-
-    data class InfoResponse(
-        @JsonProperty("playerId") val playerId: String? = null
-    )
-
-    data class RpmResponse(
-        @JsonProperty("file") val file: String? = null,
-        @JsonProperty("link") val link: String? = null,
-        @JsonProperty("source") val source: String? = null
-    )
 
     // Helper: Enkripsi String -> Hex
     private fun encryptAES(plainText: String): String {
