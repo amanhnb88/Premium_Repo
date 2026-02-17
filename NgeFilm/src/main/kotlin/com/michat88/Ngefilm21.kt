@@ -8,7 +8,6 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import com.fasterxml.jackson.annotation.JsonProperty
 import java.util.UUID
-import kotlin.random.Random
 
 class Ngefilm21 : MainAPI() {
     override var mainUrl = "https://new31.ngefilm.site"
@@ -23,7 +22,6 @@ class Ngefilm21 : MainAPI() {
 
     // --- KONFIGURASI API & ENKRIPSI ---
     private val RPM_BASE_API = "https://playerngefilm21.rpmlive.online/api/v1"
-    // Kunci dan IV Abadi (Hasil Sniper)
     private val AES_KEY = "kiemtienmua911ca"
     private val AES_IV = "1234567890oiuytr"
 
@@ -131,19 +129,16 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val rawHtml = app.get(data).text
 
-        // 1. Ekstrak ID dari RPM Live (Format: rpmlive.online/...#ID atau ?id=ID)
         val rpmRegex = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""")
         val rpmMatch = rpmRegex.find(rawHtml)
         
         if (rpmMatch != null) {
             val id = rpmMatch.groupValues[1].ifEmpty { rpmMatch.groupValues[2] }
             if (id.isNotEmpty()) {
-                // Panggil fungsi Generate Token -> Request Player
                 extractRpmGenerator(id, callback)
             }
         }
 
-        // 2. Link Download & Fallback
         val document = org.jsoup.Jsoup.parse(rawHtml)
         document.select(".gmr-download-list a").forEach { link ->
             loadExtractor(link.attr("href"), subtitleCallback, callback)
@@ -176,40 +171,27 @@ class Ngefilm21 : MainAPI() {
             val infoResponse = app.get(infoUrl, headers = commonHeaders)
             val sessionCookies = infoResponse.cookies
             
-            // Bersihkan dan DEKRIPSI respons Info untuk mendapatkan playerId
             val rawInfoHex = infoResponse.text.replace(Regex("[^0-9a-fA-F]"), "")
             val decryptedInfo = decryptHexAES(rawInfoHex)
             
-            // Parse JSON Info untuk ambil playerId
             val infoJson = AppUtils.parseJson<InfoResponse>(decryptedInfo)
-            val playerId = infoJson.playerId ?: return // Wajib ada playerId
+            val playerId = infoJson.playerId ?: return 
 
-            // LANGKAH 2: BUAT TOKEN JSON BARU (Ini kuncinya!)
-            // Kita tiru format JSON yang kamu temukan di Termux
-            val newTokenJson = TokenPayload(
-                website = "new31.ngefilm.site",
-                playing = true,
-                sessionId = UUID.randomUUID().toString(), // UUID Acak
-                userId = generateRandomString(4), // String acak pendek
-                playerId = playerId, // Dari Langkah 1
-                videoId = videoId,   // ID asli video
-                country = "ID",
-                platform = "Mobile",
-                browser = "ChromiumBase",
-                os = "Android"
-            )
+            // LANGKAH 2: BUAT TOKEN JSON MANUAL (Perbaikan di sini)
+            val sessionId = UUID.randomUUID().toString()
+            val userId = generateRandomString(4)
             
-            // Konversi Object ke JSON String
-            val jsonString = AppUtils.toJson(newTokenJson)
-            
-            // ENKRIPSI JSON tersebut menjadi Hex String (Token Jadi)
+            // Kita rakit string JSON secara manual untuk menghindari error 'Unresolved reference toJson'
+            val jsonString = "{\"website\":\"new31.ngefilm.site\",\"playing\":true,\"sessionId\":\"$sessionId\",\"userId\":\"$userId\",\"playerId\":\"$playerId\",\"videoId\":\"$videoId\",\"country\":\"ID\",\"platform\":\"Mobile\",\"browser\":\"ChromiumBase\",\"os\":\"Android\"}"
+
+            // Enkripsi JSON manual tadi
             val tokenHex = encryptAES(jsonString)
 
             // LANGKAH 3: Kirim Token Buatan Kita ke /player
             val playerUrl = "$RPM_BASE_API/player?t=$tokenHex"
             val encryptedResponse = app.get(playerUrl, headers = commonHeaders, cookies = sessionCookies).text.replace(Regex("[^0-9a-fA-F]"), "")
 
-            // LANGKAH 4: Dekripsi respons akhir dari /player
+            // LANGKAH 4: Dekripsi respons akhir
             val decryptedFinal = decryptHexAES(encryptedResponse)
             
             if (decryptedFinal.isNotEmpty()) {
@@ -221,7 +203,7 @@ class Ngefilm21 : MainAPI() {
                     streamUrl = json.file ?: json.link ?: json.source ?: ""
                 } catch (e: Exception) {}
 
-                // Coba Regex (Backup) - Menangkap parameter ?v=...
+                // Coba Regex (Backup)
                 if (streamUrl.isEmpty()) {
                     val linkRegex = Regex("""(https?:\/\/[^"']+\.m3u8[^"']*)""")
                     val linkMatch = linkRegex.find(decryptedFinal)
@@ -250,20 +232,6 @@ class Ngefilm21 : MainAPI() {
         }
     }
 
-    // Model Data untuk JSON Token yang akan kita buat
-    data class TokenPayload(
-        val website: String = "new31.ngefilm.site",
-        val playing: Boolean = true,
-        val sessionId: String,
-        val userId: String,
-        val playerId: String,
-        val videoId: String,
-        val country: String = "ID",
-        val platform: String = "Mobile",
-        val browser: String = "ChromiumBase",
-        val os: String = "Android"
-    )
-
     data class InfoResponse(
         @JsonProperty("playerId") val playerId: String? = null
     )
@@ -274,7 +242,7 @@ class Ngefilm21 : MainAPI() {
         @JsonProperty("source") val source: String? = null
     )
 
-    // Helper: Enkripsi String -> Hex (Untuk membuat token)
+    // Helper: Enkripsi String -> Hex
     private fun encryptAES(plainText: String): String {
         try {
             val keySpec = SecretKeySpec(AES_KEY.toByteArray(Charsets.UTF_8), "AES")
@@ -283,7 +251,6 @@ class Ngefilm21 : MainAPI() {
             cipher.init(Cipher.ENCRYPT_MODE, keySpec, ivSpec)
             val encryptedBytes = cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))
             
-            // Konversi bytes ke Hex String manual
             return encryptedBytes.joinToString("") { "%02x".format(it) }
         } catch (e: Exception) {
             return ""
