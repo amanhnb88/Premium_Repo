@@ -14,7 +14,7 @@ import org.jsoup.nodes.Element
 
 class KuramanimeProvider : MainAPI() {
     // Update domain ke v8, soalnya v5 udah ditinggalin
-    override var mainUrl = "https://v8.kuramanime.blog"
+    override var mainUrl = "https://v14.kuramanime.tel"
     override var name = "Kuramanime"
     override val hasQuickSearch = false
     override val hasMainPage = true
