@@ -7,6 +7,8 @@ import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import com.fasterxml.jackson.annotation.JsonProperty
+import java.util.UUID
+import kotlin.random.Random
 
 class Ngefilm21 : MainAPI() {
     override var mainUrl = "https://new31.ngefilm.site"
@@ -21,6 +23,7 @@ class Ngefilm21 : MainAPI() {
 
     // --- KONFIGURASI API & ENKRIPSI ---
     private val RPM_BASE_API = "https://playerngefilm21.rpmlive.online/api/v1"
+    // Kunci dan IV Abadi (Hasil Sniper)
     private val AES_KEY = "kiemtienmua911ca"
     private val AES_IV = "1234567890oiuytr"
 
@@ -135,12 +138,12 @@ class Ngefilm21 : MainAPI() {
         if (rpmMatch != null) {
             val id = rpmMatch.groupValues[1].ifEmpty { rpmMatch.groupValues[2] }
             if (id.isNotEmpty()) {
-                // Panggil fungsi berantai: Info -> Player -> Decrypt
-                extractRpmChain(id, callback)
+                // Panggil fungsi Generate Token -> Request Player
+                extractRpmGenerator(id, callback)
             }
         }
 
-        // 2. Link Download & Fallback Iframe Lain
+        // 2. Link Download & Fallback
         val document = org.jsoup.Jsoup.parse(rawHtml)
         document.select(".gmr-download-list a").forEach { link ->
             loadExtractor(link.attr("href"), subtitleCallback, callback)
@@ -156,8 +159,8 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
-    private suspend fun extractRpmChain(
-        id: String, 
+    private suspend fun extractRpmGenerator(
+        videoId: String, 
         callback: (ExtractorLink) -> Unit
     ) {
         try {
@@ -168,42 +171,60 @@ class Ngefilm21 : MainAPI() {
                 "Accept" to "*/*"
             )
 
-            // LANGKAH 1: Ambil Token Hex dari endpoint /info
-            val infoUrl = "$RPM_BASE_API/info?id=$id"
+            // LANGKAH 1: Ambil Info Terenkripsi
+            val infoUrl = "$RPM_BASE_API/info?id=$videoId"
             val infoResponse = app.get(infoUrl, headers = commonHeaders)
-            
-            // Simpan Cookies untuk jaga-jaga
             val sessionCookies = infoResponse.cookies
             
-            // Bersihkan token hex dari karakter sampah
-            val tokenHex = infoResponse.text.replace(Regex("[^0-9a-fA-F]"), "")
+            // Bersihkan dan DEKRIPSI respons Info untuk mendapatkan playerId
+            val rawInfoHex = infoResponse.text.replace(Regex("[^0-9a-fA-F]"), "")
+            val decryptedInfo = decryptHexAES(rawInfoHex)
+            
+            // Parse JSON Info untuk ambil playerId
+            val infoJson = AppUtils.parseJson<InfoResponse>(decryptedInfo)
+            val playerId = infoJson.playerId ?: return // Wajib ada playerId
 
-            if (tokenHex.isEmpty()) return
+            // LANGKAH 2: BUAT TOKEN JSON BARU (Ini kuncinya!)
+            // Kita tiru format JSON yang kamu temukan di Termux
+            val newTokenJson = TokenPayload(
+                website = "new31.ngefilm.site",
+                playing = true,
+                sessionId = UUID.randomUUID().toString(), // UUID Acak
+                userId = generateRandomString(4), // String acak pendek
+                playerId = playerId, // Dari Langkah 1
+                videoId = videoId,   // ID asli video
+                country = "ID",
+                platform = "Mobile",
+                browser = "ChromiumBase",
+                os = "Android"
+            )
+            
+            // Konversi Object ke JSON String
+            val jsonString = AppUtils.toJson(newTokenJson)
+            
+            // ENKRIPSI JSON tersebut menjadi Hex String (Token Jadi)
+            val tokenHex = encryptAES(jsonString)
 
-            // LANGKAH 2: Kirim Token Hex ke endpoint /player?t=...
+            // LANGKAH 3: Kirim Token Buatan Kita ke /player
             val playerUrl = "$RPM_BASE_API/player?t=$tokenHex"
             val encryptedResponse = app.get(playerUrl, headers = commonHeaders, cookies = sessionCookies).text.replace(Regex("[^0-9a-fA-F]"), "")
 
-            // LANGKAH 3: Dekripsi respons dari /player
-            val decryptedJson = decryptHexAES(encryptedResponse)
+            // LANGKAH 4: Dekripsi respons akhir dari /player
+            val decryptedFinal = decryptHexAES(encryptedResponse)
             
-            if (decryptedJson.isNotEmpty()) {
+            if (decryptedFinal.isNotEmpty()) {
                 var streamUrl = ""
                 
-                // Prioritas 1: Parsing JSON (Lebih stabil)
+                // Coba Parse JSON
                 try {
-                    val json = AppUtils.parseJson<RpmResponse>(decryptedJson)
+                    val json = AppUtils.parseJson<RpmResponse>(decryptedFinal)
                     streamUrl = json.file ?: json.link ?: json.source ?: ""
-                } catch (e: Exception) {
-                    // Ignore
-                }
+                } catch (e: Exception) {}
 
-                // Prioritas 2: Regex Backup (Jika parsing gagal)
-                // UPDATE PENTING: Regex ini menangkap parameter ?v=... di belakang .m3u8
+                // Coba Regex (Backup) - Menangkap parameter ?v=...
                 if (streamUrl.isEmpty()) {
-                    // Mencari "https://....m3u8...sampai tanda kutip"
                     val linkRegex = Regex("""(https?:\/\/[^"']+\.m3u8[^"']*)""")
-                    val linkMatch = linkRegex.find(decryptedJson)
+                    val linkMatch = linkRegex.find(decryptedFinal)
                     if (linkMatch != null) {
                         streamUrl = linkMatch.groupValues[1].replace("\\/", "/")
                     }
@@ -217,7 +238,6 @@ class Ngefilm21 : MainAPI() {
                             url = streamUrl,
                             type = ExtractorLinkType.M3U8
                         ) {
-                            // Referer PENTING sesuai curl: https://playerngefilm21.rpmlive.online/
                             this.referer = "https://playerngefilm21.rpmlive.online/"
                             this.quality = getQualityFromName("HD")
                         }
@@ -230,13 +250,47 @@ class Ngefilm21 : MainAPI() {
         }
     }
 
+    // Model Data untuk JSON Token yang akan kita buat
+    data class TokenPayload(
+        val website: String = "new31.ngefilm.site",
+        val playing: Boolean = true,
+        val sessionId: String,
+        val userId: String,
+        val playerId: String,
+        val videoId: String,
+        val country: String = "ID",
+        val platform: String = "Mobile",
+        val browser: String = "ChromiumBase",
+        val os: String = "Android"
+    )
+
+    data class InfoResponse(
+        @JsonProperty("playerId") val playerId: String? = null
+    )
+
     data class RpmResponse(
         @JsonProperty("file") val file: String? = null,
         @JsonProperty("link") val link: String? = null,
-        @JsonProperty("source") val source: String? = null,
-        @JsonProperty("label") val label: String? = null
+        @JsonProperty("source") val source: String? = null
     )
 
+    // Helper: Enkripsi String -> Hex (Untuk membuat token)
+    private fun encryptAES(plainText: String): String {
+        try {
+            val keySpec = SecretKeySpec(AES_KEY.toByteArray(Charsets.UTF_8), "AES")
+            val ivSpec = IvParameterSpec(AES_IV.toByteArray(Charsets.UTF_8))
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+            cipher.init(Cipher.ENCRYPT_MODE, keySpec, ivSpec)
+            val encryptedBytes = cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))
+            
+            // Konversi bytes ke Hex String manual
+            return encryptedBytes.joinToString("") { "%02x".format(it) }
+        } catch (e: Exception) {
+            return ""
+        }
+    }
+
+    // Helper: Dekripsi Hex -> String
     private fun decryptHexAES(hexString: String): String {
         try {
             if (hexString.isEmpty()) return ""
@@ -262,5 +316,12 @@ class Ngefilm21 : MainAPI() {
             i += 2
         }
         return data
+    }
+    
+    private fun generateRandomString(length: Int): String {
+        val allowedChars = "abcdefghijklmnopqrstuvwxyz0123456789"
+        return (1..length)
+            .map { allowedChars.random() }
+            .joinToString("")
     }
 }
