@@ -19,9 +19,9 @@ class Ngefilm21 : MainAPI() {
         TvType.AsianDrama
     )
 
-    // --- KONFIGURASI ---
-    // Endpoint diganti ke /info sesuai temuan cURL
-    private val RPM_INFO_API = "https://playerngefilm21.rpmlive.online/api/v1/info"
+    // --- KONFIGURASI API & ENKRIPSI ---
+    private val RPM_BASE_API = "https://playerngefilm21.rpmlive.online/api/v1"
+    // Kunci dan IV dari temuan "Sniper Aktif"
     private val AES_KEY = "kiemtienmua911ca"
     private val AES_IV = "1234567890oiuytr"
 
@@ -69,15 +69,19 @@ class Ngefilm21 : MainAPI() {
             val name = it.text()
             if (name.isNotBlank()) ActorData(Actor(name, null)) else null
         }
+
         var trailerUrl = document.selectFirst("a.gmr-trailer-popup")?.attr("href")
         if (trailerUrl == null) {
             trailerUrl = document.selectFirst("iframe[src*='youtube.com']")?.attr("src")
         }
+
         val episodeElements = document.select(".gmr-listseries a").filter {
             it.attr("href").contains("/eps/") && !it.text().contains("Pilih", true)
         }
+
         val isSeries = episodeElements.isNotEmpty()
         val type = if (isSeries) TvType.TvSeries else TvType.Movie
+
         val response = if (isSeries) {
             val episodes = episodeElements.mapNotNull { element ->
                 val epUrl = element.attr("href")
@@ -109,9 +113,11 @@ class Ngefilm21 : MainAPI() {
                 this.actors = actors
             }
         }
+
         if (trailerUrl != null) {
              response.trailers.add(TrailerData(trailerUrl, null, false))
         }
+
         return response
     }
 
@@ -123,19 +129,19 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val rawHtml = app.get(data).text
 
-        // 1. Ekstrak ID dari RPM Live
+        // 1. Ekstrak ID dari RPM Live (Format: rpmlive.online/...#ID atau ?id=ID)
         val rpmRegex = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""")
         val rpmMatch = rpmRegex.find(rawHtml)
         
         if (rpmMatch != null) {
             val id = rpmMatch.groupValues[1].ifEmpty { rpmMatch.groupValues[2] }
             if (id.isNotEmpty()) {
-                // Gunakan endpoint /info bukan /player
-                extractRpmInfo(id, callback)
+                // Panggil fungsi berantai: Info -> Player -> Decrypt
+                extractRpmChain(id, callback)
             }
         }
 
-        // 2. Link Download & Fallback
+        // 2. Link Download & Fallback Iframe Lain
         val document = org.jsoup.Jsoup.parse(rawHtml)
         document.select(".gmr-download-list a").forEach { link ->
             loadExtractor(link.attr("href"), subtitleCallback, callback)
@@ -151,32 +157,35 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
-    private suspend fun extractRpmInfo(
+    private suspend fun extractRpmChain(
         id: String, 
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val apiUrl = "$RPM_INFO_API?id=$id"
-            // Header minimalis tapi mirip browser
-            val headers = mapOf(
+            val commonHeaders = mapOf(
                 "Referer" to "https://playerngefilm21.rpmlive.online/",
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-                "Accept" to "*/*",
                 "Origin" to "https://playerngefilm21.rpmlive.online"
             )
 
-            // Request ke endpoint info
-            val responseBody = app.get(apiUrl, headers = headers).text.trim()
+            // LANGKAH 1: Ambil Token dari endpoint /info
+            // Responsnya adalah String Hex Panjang (ini adalah tokennya!)
+            val infoUrl = "$RPM_BASE_API/info?id=$id"
+            val tokenHex = app.get(infoUrl, headers = commonHeaders).text.trim()
+
+            if (tokenHex.isEmpty() || tokenHex.contains("error")) return
+
+            // LANGKAH 2: Kirim Token Hex ke endpoint /player?t=...
+            val playerUrl = "$RPM_BASE_API/player?t=$tokenHex"
+            val encryptedResponse = app.get(playerUrl, headers = commonHeaders).text.trim()
+
+            // LANGKAH 3: Dekripsi respons dari /player
+            // Respons ini yang berisi JSON { "file": "...", "label": "..." } yang terenkripsi
+            val decryptedJson = decryptHexAES(encryptedResponse)
             
-            // Response adalah HEX string panjang. Kita harus decode Hex -> Bytes -> Decrypt
-            val decrypted = decryptHexAES(responseBody)
-            
-            if (decrypted.isNotEmpty()) {
-                // Parsing hasil dekripsi sebagai JSON
-                val json = AppUtils.parseJson<RpmResponse>(decrypted)
+            if (decryptedJson.isNotEmpty()) {
+                val json = AppUtils.parseJson<RpmResponse>(decryptedJson)
                 
-                // Ambil link video (biasanya di field 'file' atau 'video')
-                // Menyesuaikan dengan struktur umum: {"file": "https://...", ...}
                 if (!json.file.isNullOrEmpty()) {
                     callback.invoke(
                         newExtractorLink(
@@ -202,17 +211,19 @@ class Ngefilm21 : MainAPI() {
         @JsonProperty("label") val label: String? = null
     )
 
-    // Fungsi Dekripsi Hex String
+    // Fungsi Dekripsi Hex String menggunakan AES/CBC/PKCS5Padding
     private fun decryptHexAES(hexString: String): String {
         try {
+            if (hexString.isEmpty()) return ""
+
             // 1. Convert Hex String ke Byte Array
             val encryptedBytes = hexStringToByteArray(hexString)
 
-            // 2. Siapkan Key dan IV
+            // 2. Siapkan Key dan IV (hardcoded dari temuan kita)
             val keySpec = SecretKeySpec(AES_KEY.toByteArray(Charsets.UTF_8), "AES")
             val ivSpec = IvParameterSpec(AES_IV.toByteArray(Charsets.UTF_8))
 
-            // 3. Dekripsi (AES/CBC/PKCS5Padding)
+            // 3. Dekripsi
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
             
@@ -224,9 +235,10 @@ class Ngefilm21 : MainAPI() {
         }
     }
 
-    // Helper: Hex to Bytes
     private fun hexStringToByteArray(s: String): ByteArray {
         val len = s.length
+        if (len % 2 != 0) return ByteArray(0) // Safety check
+        
         val data = ByteArray(len / 2)
         var i = 0
         while (i < len) {
