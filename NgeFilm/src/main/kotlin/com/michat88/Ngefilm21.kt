@@ -3,6 +3,7 @@ package com.michat88
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
+import org.jsoup.Jsoup
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -22,14 +23,20 @@ class Ngefilm21 : MainAPI() {
     private val RPM_KEY = "6b69656d7469656e6d75613931316361"
     private val RPM_IV  = "313233343536373839306f6975797472"
 
+    // Helper untuk mengambil gambar (menangani lazy load dan resolusi)
     private fun Element.getImageAttr(): String? {
-        val url = this.attr("data-src").ifEmpty { this.attr("src") }
+        val url = this.attr("data-src").ifEmpty {
+            this.attr("src")
+        }
+        // Menghapus suffix ukuran gambar (misal -152x228) agar dapat kualitas HD
         return url.replace(Regex("-\\d+x\\d+"), "")
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val document = app.get("$mainUrl/page/$page/").document
-        val home = document.select("article.item-infinite").mapNotNull { it.toSearchResult() }
+        val home = document.select("article.item-infinite").mapNotNull {
+            it.toSearchResult()
+        }
         return newHomePageResponse(HomePageList("Upload Terbaru", home), hasNext = true)
     }
 
@@ -38,37 +45,55 @@ class Ngefilm21 : MainAPI() {
         val title = titleElement.text()
         val href = titleElement.attr("href")
         val posterUrl = this.selectFirst(".content-thumbnail img")?.getImageAttr()
+        
         val quality = this.selectFirst(".gmr-quality-item a")?.text() ?: "HD"
         val ratingText = this.selectFirst(".gmr-rating-item")?.text()?.trim()
 
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = posterUrl
             addQuality(quality)
+            // Menggunakan Score.from10 untuk sistem rating baru
             this.score = Score.from10(ratingText?.toDoubleOrNull())
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/?s=$query&post_type[]=post&post_type[]=tv"
-        return app.get(url).document.select("article.item-infinite").mapNotNull { it.toSearchResult() }
+        val document = app.get(url).document
+
+        return document.select("article.item-infinite").mapNotNull {
+            it.toSearchResult()
+        }
     }
 
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
+
+        // 1. Mengambil Detail Utama
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: ""
         val poster = document.selectFirst(".gmr-movie-data figure img")?.getImageAttr()
         val plot = document.selectFirst("div.entry-content[itemprop='description'] p")?.text()?.trim()
         val year = document.selectFirst(".gmr-moviedata:contains(Tahun) a")?.text()?.trim()?.toIntOrNull()
         val ratingText = document.selectFirst("span[itemprop='ratingValue']")?.text()?.trim()
+
+        // 2. Mengambil Genre dan Aktor
         val tags = document.select(".gmr-moviedata:contains(Genre) a").map { it.text() }
+        
+        // Map Actor ke ActorData agar sesuai tipe data
         val actors = document.select("span[itemprop='actors'] a").mapNotNull {
             val name = it.text()
-            if (name.isNotBlank()) ActorData(Actor(name, null)) else null
+            if (name.isNotBlank()) {
+                ActorData(Actor(name, null))
+            } else null
         }
 
+        // 3. Mengambil Trailer
         var trailerUrl = document.selectFirst("a.gmr-trailer-popup")?.attr("href")
-            ?: document.selectFirst("iframe[src*='youtube.com']")?.attr("src")
+        if (trailerUrl == null) {
+            trailerUrl = document.selectFirst("iframe[src*='youtube.com']")?.attr("src")
+        }
 
+        // 4. Logika TV Series vs Movie
         val episodeElements = document.select(".gmr-listseries a").filter {
             it.attr("href").contains("/eps/") && !it.text().contains("Pilih", true)
         }
@@ -79,20 +104,43 @@ class Ngefilm21 : MainAPI() {
         val response = if (isSeries) {
             val episodes = episodeElements.mapNotNull { element ->
                 val epUrl = element.attr("href")
-                val epNum = Regex("(\\d+)").find(element.text())?.groupValues?.get(1)?.toIntOrNull()
-                if (epUrl.isNotEmpty()) newEpisode(epUrl) { this.episode = epNum } else null
+                val epText = element.text()
+                
+                val epNum = Regex("(\\d+)").find(epText)?.groupValues?.get(1)?.toIntOrNull()
+                val epName = element.attr("title").removePrefix("Permalink ke ")
+
+                if (epUrl.isNotEmpty()) {
+                    newEpisode(epUrl) {
+                        this.name = epName
+                        this.episode = epNum
+                    }
+                } else null
             }
+            
             newTvSeriesLoadResponse(title, url, type, episodes) {
-                this.posterUrl = poster; this.plot = plot; this.year = year
-                this.score = Score.from10(ratingText?.toDoubleOrNull()); this.tags = tags; this.actors = actors
+                this.posterUrl = poster
+                this.plot = plot
+                this.year = year
+                this.score = Score.from10(ratingText?.toDoubleOrNull())
+                this.tags = tags
+                this.actors = actors
             }
         } else {
             newMovieLoadResponse(title, url, type, url) {
-                this.posterUrl = poster; this.plot = plot; this.year = year
-                this.score = Score.from10(ratingText?.toDoubleOrNull()); this.tags = tags; this.actors = actors
+                this.posterUrl = poster
+                this.plot = plot
+                this.year = year
+                this.score = Score.from10(ratingText?.toDoubleOrNull())
+                this.tags = tags
+                this.actors = actors
             }
         }
-        if (trailerUrl != null) response.trailers.add(TrailerData(trailerUrl, null, false))
+
+        // FIX TRAILER: Masukkan ke list trailers manual di luar blok builder
+        if (trailerUrl != null) {
+             response.trailers.add(TrailerData(trailerUrl, null, false))
+        }
+
         return response
     }
 
@@ -104,6 +152,7 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
+        // 1. Ekstrak Player Utama (Iframe yang langsung terlihat)
         document.select("iframe").forEach { iframe ->
             val src = iframe.attr("src")
             val fixedSrc = if (src.startsWith("//")) "https:$src" else src
@@ -123,9 +172,17 @@ class Ngefilm21 : MainAPI() {
                         val videoUrl = Regex(""""file":"([^"]+)"""").find(decrypted)?.groupValues?.get(1)
                         
                         if (videoUrl != null) {
+                            // PERBAIKAN: Menggunakan newExtractorLink agar tidak deprecated
                             callback.invoke(
-                                ExtractorLink("RPMLive VIP", "RPMLive VIP", videoUrl.replace("\\/", "/"), 
-                                "https://playerngefilm21.rpmlive.online/", Qualities.Unknown.value, isM3u8 = true)
+                                newExtractorLink(
+                                    "RPMLive VIP",
+                                    "RPMLive VIP",
+                                    videoUrl.replace("\\/", "/")
+                                ) {
+                                    this.referer = "https://playerngefilm21.rpmlive.online/"
+                                    this.quality = Qualities.Unknown.value
+                                    this.type = ExtractorLinkType.M3U8
+                                }
                             )
                         }
                     } catch (e: Exception) { }
@@ -135,7 +192,30 @@ class Ngefilm21 : MainAPI() {
             }
         }
 
-        document.select(".gmr-download-list a").forEach { loadExtractor(it.attr("href"), subtitleCallback, callback) }
+        // 2. Ekstrak Link Download (Bagian bawah player)
+        document.select(".gmr-download-list a").forEach { link ->
+            val href = link.attr("href")
+            loadExtractor(href, subtitleCallback, callback)
+        }
+
+        // 3. Ekstrak Server Tambahan (Tab Server 2, Server 3, dst)
+        document.select(".muvipro-player-tabs a").forEach { tab ->
+            val href = tab.attr("href")
+            if (href.contains("?player=") && !tab.hasClass("active")) {
+                val fullUrl = if (href.startsWith("http")) href else "$mainUrl$href"
+                try {
+                    val subDoc = app.get(fullUrl).document
+                    subDoc.select("iframe").forEach { iframe ->
+                        val src = iframe.attr("src")
+                        val fixedSrc = if (src.startsWith("//")) "https:$src" else src
+                        if (!fixedSrc.contains("youtube.com")) {
+                            loadExtractor(fixedSrc, subtitleCallback, callback)
+                        }
+                    }
+                } catch (e: Exception) { }
+            }
+        }
+
         return true
     }
 
