@@ -20,10 +20,7 @@ class Ngefilm21 : MainAPI() {
     )
 
     // --- KONFIGURASI API & ENKRIPSI ---
-    // Base API untuk endpoint info dan player
     private val RPM_BASE_API = "https://playerngefilm21.rpmlive.online/api/v1"
-    
-    // Kunci dan IV (Hardcoded dari temuan analisis kita)
     private val AES_KEY = "kiemtienmua911ca"
     private val AES_IV = "1234567890oiuytr"
 
@@ -159,13 +156,11 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
-    // Fungsi Utama: Mengelola Rantai Request (Info -> Player -> Decrypt)
     private suspend fun extractRpmChain(
         id: String, 
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // Header wajib agar tidak ditolak server (berdasarkan curl kamu)
             val commonHeaders = mapOf(
                 "Referer" to "https://playerngefilm21.rpmlive.online/",
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
@@ -175,31 +170,54 @@ class Ngefilm21 : MainAPI() {
 
             // LANGKAH 1: Ambil Token Hex dari endpoint /info
             val infoUrl = "$RPM_BASE_API/info?id=$id"
-            val tokenHex = app.get(infoUrl, headers = commonHeaders).text.trim()
+            val infoResponse = app.get(infoUrl, headers = commonHeaders)
+            
+            // Simpan Cookies untuk jaga-jaga
+            val sessionCookies = infoResponse.cookies
+            
+            // Bersihkan token hex dari karakter sampah
+            val tokenHex = infoResponse.text.replace(Regex("[^0-9a-fA-F]"), "")
 
-            // Jika gagal dapat token atau ada error, berhenti
-            if (tokenHex.isEmpty() || tokenHex.contains("error")) return
+            if (tokenHex.isEmpty()) return
 
-            // LANGKAH 2: Kirim Token Hex ke endpoint /player menggunakan parameter 't'
-            // Inilah kunci perbaikannya: parameter 't', bukan 'id'
+            // LANGKAH 2: Kirim Token Hex ke endpoint /player?t=...
             val playerUrl = "$RPM_BASE_API/player?t=$tokenHex"
-            val encryptedResponse = app.get(playerUrl, headers = commonHeaders).text.trim()
+            val encryptedResponse = app.get(playerUrl, headers = commonHeaders, cookies = sessionCookies).text.replace(Regex("[^0-9a-fA-F]"), "")
 
-            // LANGKAH 3: Dekripsi respons dari /player (Hex -> Bytes -> Decrypt AES)
+            // LANGKAH 3: Dekripsi respons dari /player
             val decryptedJson = decryptHexAES(encryptedResponse)
             
             if (decryptedJson.isNotEmpty()) {
-                // Parsing JSON hasil dekripsi
-                val json = AppUtils.parseJson<RpmResponse>(decryptedJson)
+                var streamUrl = ""
                 
-                if (!json.file.isNullOrEmpty()) {
+                // Prioritas 1: Parsing JSON (Lebih stabil)
+                try {
+                    val json = AppUtils.parseJson<RpmResponse>(decryptedJson)
+                    streamUrl = json.file ?: json.link ?: json.source ?: ""
+                } catch (e: Exception) {
+                    // Ignore
+                }
+
+                // Prioritas 2: Regex Backup (Jika parsing gagal)
+                // UPDATE PENTING: Regex ini menangkap parameter ?v=... di belakang .m3u8
+                if (streamUrl.isEmpty()) {
+                    // Mencari "https://....m3u8...sampai tanda kutip"
+                    val linkRegex = Regex("""(https?:\/\/[^"']+\.m3u8[^"']*)""")
+                    val linkMatch = linkRegex.find(decryptedJson)
+                    if (linkMatch != null) {
+                        streamUrl = linkMatch.groupValues[1].replace("\\/", "/")
+                    }
+                }
+
+                if (streamUrl.isNotEmpty()) {
                     callback.invoke(
                         newExtractorLink(
                             source = "RPM Live",
                             name = "RPM Live (Auto)",
-                            url = json.file,
+                            url = streamUrl,
                             type = ExtractorLinkType.M3U8
                         ) {
+                            // Referer PENTING sesuai curl: https://playerngefilm21.rpmlive.online/
                             this.referer = "https://playerngefilm21.rpmlive.online/"
                             this.quality = getQualityFromName("HD")
                         }
@@ -214,38 +232,29 @@ class Ngefilm21 : MainAPI() {
 
     data class RpmResponse(
         @JsonProperty("file") val file: String? = null,
+        @JsonProperty("link") val link: String? = null,
+        @JsonProperty("source") val source: String? = null,
         @JsonProperty("label") val label: String? = null
     )
 
-    // Fungsi Dekripsi Hex String menggunakan AES/CBC/PKCS5Padding
     private fun decryptHexAES(hexString: String): String {
         try {
             if (hexString.isEmpty()) return ""
-
-            // 1. Convert Hex String ke Byte Array
             val encryptedBytes = hexStringToByteArray(hexString)
-
-            // 2. Siapkan Key dan IV (hardcoded dari temuan kita)
             val keySpec = SecretKeySpec(AES_KEY.toByteArray(Charsets.UTF_8), "AES")
             val ivSpec = IvParameterSpec(AES_IV.toByteArray(Charsets.UTF_8))
-
-            // 3. Dekripsi
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
-            
             val decryptedBytes = cipher.doFinal(encryptedBytes)
             return String(decryptedBytes, Charsets.UTF_8)
         } catch (e: Exception) {
-            e.printStackTrace()
             return ""
         }
     }
 
-    // Helper sederhana: Hex String -> Byte Array
     private fun hexStringToByteArray(s: String): ByteArray {
         val len = s.length
         if (len % 2 != 0) return ByteArray(0) 
-        
         val data = ByteArray(len / 2)
         var i = 0
         while (i < len) {
