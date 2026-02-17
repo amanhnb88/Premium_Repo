@@ -19,13 +19,10 @@ class Ngefilm21 : MainAPI() {
         TvType.AsianDrama
     )
 
-    // --- KONFIGURASI DEKRIPSI (DARI LOG SADAP) ---
-    // Key 1: 1077efecc0b24d02ace33c1e52e2fb4b
+    // --- KONFIGURASI DEKRIPSI ---
     private val RPM_KEY = "1077efecc0b24d02ace33c1e52e2fb4b" 
-    // IV: 0123456789abcdef
     private val RPM_IV = "0123456789abcdef" 
 
-    // Helper untuk mengambil gambar
     private fun Element.getImageAttr(): String? {
         val url = this.attr("data-src").ifEmpty { this.attr("src") }
         return url.replace(Regex("-\\d+x\\d+"), "")
@@ -136,12 +133,11 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // 1. CARI PLAYER UTAMA (TERMASUK RPMLIVE)
+        // 1. CARI PLAYER UTAMA
         document.select("iframe").forEach { iframe ->
             val src = iframe.attr("src")
             val fixedSrc = if (src.startsWith("//")) "https:$src" else src
             
-            // Deteksi RPMLive berdasarkan pola log
             if (fixedSrc.contains("rpmlive.online")) {
                  val playerId = Regex("rpmlive\\.online/.*#([a-zA-Z0-9]+)").find(fixedSrc)?.groupValues?.get(1)
                  if (playerId != null) {
@@ -167,13 +163,10 @@ class Ngefilm21 : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // API Endpoint dari log
             val apiUrl = "https://playerngefilm21.rpmlive.online/api/v1/info?id=$id"
             val headers = mapOf("Referer" to "https://playerngefilm21.rpmlive.online/")
             
             val encryptedResponse = app.get(apiUrl, headers = headers).text
-            
-            // Dekripsi JSON
             val decryptedJson = decryptAes(encryptedResponse, RPM_KEY, RPM_IV)
             
             if (!decryptedJson.isNullOrEmpty()) {
@@ -183,15 +176,18 @@ class Ngefilm21 : MainAPI() {
                     val file = source.file ?: return@forEach
                     val label = source.label ?: "Auto"
                     
-                    // PERBAIKAN: Menggunakan newExtractorLink menggantikan constructor usang
+                    // PERBAIKAN DI SINI:
+                    // referer dan quality dimasukkan ke dalam block {} (initializer)
                     callback.invoke(
                         newExtractorLink(
                             source = "Ngefilm VIP",
                             name = "Ngefilm VIP $label",
                             url = file,
-                            referer = "https://playerngefilm21.rpmlive.online/",
-                            quality = getQualityFromName(label)
-                        )
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = "https://playerngefilm21.rpmlive.online/"
+                            this.quality = getQualityFromName(label)
+                        }
                     )
                 }
 
@@ -208,7 +204,6 @@ class Ngefilm21 : MainAPI() {
         }
     }
 
-    // Fungsi Dekripsi AES (Key Hex String, IV UTF-8 String)
     private fun decryptAes(encrypted: String, keyHex: String, ivString: String): String? {
         return try {
             val keyBytes = hexToBytes(keyHex)
@@ -219,7 +214,6 @@ class Ngefilm21 : MainAPI() {
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec)
             
-            // API mengembalikan data dalam format Hex string, bukan Base64 standar
             val encryptedBytes = hexToBytes(encrypted)
             val decryptedBytes = cipher.doFinal(encryptedBytes)
             
@@ -229,7 +223,6 @@ class Ngefilm21 : MainAPI() {
         }
     }
 
-    // Utilitas Hex to Bytes
     private fun hexToBytes(hex: String): ByteArray {
         val result = ByteArray(hex.length / 2)
         for (i in result.indices) {
@@ -240,7 +233,6 @@ class Ngefilm21 : MainAPI() {
         return result
     }
 
-    // Data Class untuk parsing JSON hasil dekripsi
     data class RpmResponse(
         @JsonProperty("sources") val sources: List<RpmSource>?,
         @JsonProperty("tracks") val tracks: List<RpmTrack>?
