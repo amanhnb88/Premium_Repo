@@ -96,11 +96,11 @@ open class AdiFilmSemi : TmdbProvider() {
         // 1. Vivamax Movie (Tagalog + Romance/Drama + Recent)
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=tl&with_genres=10749&sort_by=release_date.desc&vote_count.gte=1" to "Vivamax Movie (New)",
         
-        // 2. Vivamax Series
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_original_language=tl&with_genres=10749&sort_by=first_air_date.desc&vote_count.gte=1" to "Vivamax Series (New)",
+        // 2. Vivamax Series (Official Company ID)
+        "$tmdbAPI/discover/tv?api_key=$apiKey&with_companies=149142&sort_by=first_air_date.desc&vote_count.gte=1" to "Vivamax Series (Official)",
         
-        // 3. Korean Erotic/Romance (Romance + Drama + Korea)
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=ko&with_genres=10749,18&sort_by=release_date.desc&vote_count.gte=1" to "Korean Steamy Romance",
+        // 3. Softcore Movies (UPDATED: Keyword ID 155477)
+        "$tmdbAPI/discover/movie?api_key=$apiKey&with_keywords=155477&sort_by=popularity.desc&vote_count.gte=1" to "Softcore Movies",
         
         // 4. Japanese Pinku Style (Romance + Japan)
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=ja&with_genres=10749&sort_by=popularity.desc&vote_count.gte=1" to "Japanese Romance & Drama",
