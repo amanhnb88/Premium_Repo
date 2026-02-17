@@ -20,8 +20,10 @@ class Ngefilm21 : MainAPI() {
     )
 
     // --- KONFIGURASI API & ENKRIPSI ---
+    // Base API untuk endpoint info dan player
     private val RPM_BASE_API = "https://playerngefilm21.rpmlive.online/api/v1"
-    // Kunci dan IV dari temuan "Sniper Aktif"
+    
+    // Kunci dan IV (Hardcoded dari temuan analisis kita)
     private val AES_KEY = "kiemtienmua911ca"
     private val AES_IV = "1234567890oiuytr"
 
@@ -157,33 +159,37 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
+    // Fungsi Utama: Mengelola Rantai Request (Info -> Player -> Decrypt)
     private suspend fun extractRpmChain(
         id: String, 
         callback: (ExtractorLink) -> Unit
     ) {
         try {
+            // Header wajib agar tidak ditolak server (berdasarkan curl kamu)
             val commonHeaders = mapOf(
                 "Referer" to "https://playerngefilm21.rpmlive.online/",
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-                "Origin" to "https://playerngefilm21.rpmlive.online"
+                "Origin" to "https://playerngefilm21.rpmlive.online",
+                "Accept" to "*/*"
             )
 
-            // LANGKAH 1: Ambil Token dari endpoint /info
-            // Responsnya adalah String Hex Panjang (ini adalah tokennya!)
+            // LANGKAH 1: Ambil Token Hex dari endpoint /info
             val infoUrl = "$RPM_BASE_API/info?id=$id"
             val tokenHex = app.get(infoUrl, headers = commonHeaders).text.trim()
 
+            // Jika gagal dapat token atau ada error, berhenti
             if (tokenHex.isEmpty() || tokenHex.contains("error")) return
 
-            // LANGKAH 2: Kirim Token Hex ke endpoint /player?t=...
+            // LANGKAH 2: Kirim Token Hex ke endpoint /player menggunakan parameter 't'
+            // Inilah kunci perbaikannya: parameter 't', bukan 'id'
             val playerUrl = "$RPM_BASE_API/player?t=$tokenHex"
             val encryptedResponse = app.get(playerUrl, headers = commonHeaders).text.trim()
 
-            // LANGKAH 3: Dekripsi respons dari /player
-            // Respons ini yang berisi JSON { "file": "...", "label": "..." } yang terenkripsi
+            // LANGKAH 3: Dekripsi respons dari /player (Hex -> Bytes -> Decrypt AES)
             val decryptedJson = decryptHexAES(encryptedResponse)
             
             if (decryptedJson.isNotEmpty()) {
+                // Parsing JSON hasil dekripsi
                 val json = AppUtils.parseJson<RpmResponse>(decryptedJson)
                 
                 if (!json.file.isNullOrEmpty()) {
@@ -235,9 +241,10 @@ class Ngefilm21 : MainAPI() {
         }
     }
 
+    // Helper sederhana: Hex String -> Byte Array
     private fun hexStringToByteArray(s: String): ByteArray {
         val len = s.length
-        if (len % 2 != 0) return ByteArray(0) // Safety check
+        if (len % 2 != 0) return ByteArray(0) 
         
         val data = ByteArray(len / 2)
         var i = 0
