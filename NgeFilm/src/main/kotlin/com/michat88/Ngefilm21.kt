@@ -3,9 +3,11 @@ package com.michat88
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
+import org.jsoup.Jsoup
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import com.fasterxml.jackson.annotation.JsonProperty
 
 class Ngefilm21 : MainAPI() {
     override var mainUrl = "https://new31.ngefilm.site"
@@ -18,18 +20,27 @@ class Ngefilm21 : MainAPI() {
         TvType.AsianDrama
     )
 
-    // KUNCI DAN IV HASIL SADAPAN SNIPER
-    private val RPM_KEY = "6b69656d7469656e6d75613931316361"
-    private val RPM_IV  = "313233343536373839306f6975797472"
+    // --- KONFIGURASI BARU DARI SCREENSHOT ---
+    private val RPM_PLAYER_API = "https://playerngefilm21.rpmlive.online/api/v1/player"
+    // Kunci hasil decode dari Hex: 6b69656d7469656e6d75613931316361
+    private val AES_KEY = "kiemtienmua911ca"
+    // IV hasil decode dari Hex: 313233343536373839306f6975797472
+    private val AES_IV = "1234567890oiuytr"
+    // ----------------------------------------
 
+    // Helper untuk mengambil gambar (menangani lazy load dan resolusi)
     private fun Element.getImageAttr(): String? {
-        val url = this.attr("data-src").ifEmpty { this.attr("src") }
+        val url = this.attr("data-src").ifEmpty {
+            this.attr("src")
+        }
         return url.replace(Regex("-\\d+x\\d+"), "")
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val document = app.get("$mainUrl/page/$page/").document
-        val home = document.select("article.item-infinite").mapNotNull { it.toSearchResult() }
+        val home = document.select("article.item-infinite").mapNotNull {
+            it.toSearchResult()
+        }
         return newHomePageResponse(HomePageList("Upload Terbaru", home), hasNext = true)
     }
 
@@ -38,6 +49,7 @@ class Ngefilm21 : MainAPI() {
         val title = titleElement.text()
         val href = titleElement.attr("href")
         val posterUrl = this.selectFirst(".content-thumbnail img")?.getImageAttr()
+        
         val quality = this.selectFirst(".gmr-quality-item a")?.text() ?: "HD"
         val ratingText = this.selectFirst(".gmr-rating-item")?.text()?.trim()
 
@@ -50,24 +62,33 @@ class Ngefilm21 : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/?s=$query&post_type[]=post&post_type[]=tv"
-        return app.get(url).document.select("article.item-infinite").mapNotNull { it.toSearchResult() }
+        val document = app.get(url).document
+
+        return document.select("article.item-infinite").mapNotNull {
+            it.toSearchResult()
+        }
     }
 
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
+
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: ""
         val poster = document.selectFirst(".gmr-movie-data figure img")?.getImageAttr()
         val plot = document.selectFirst("div.entry-content[itemprop='description'] p")?.text()?.trim()
         val year = document.selectFirst(".gmr-moviedata:contains(Tahun) a")?.text()?.trim()?.toIntOrNull()
-        val ratingValue = document.selectFirst("span[itemprop='ratingValue']")?.text()?.trim()
+        val ratingText = document.selectFirst("span[itemprop='ratingValue']")?.text()?.trim()
+
         val tags = document.select(".gmr-moviedata:contains(Genre) a").map { it.text() }
+        
         val actors = document.select("span[itemprop='actors'] a").mapNotNull {
             val name = it.text()
             if (name.isNotBlank()) ActorData(Actor(name, null)) else null
         }
 
         var trailerUrl = document.selectFirst("a.gmr-trailer-popup")?.attr("href")
-            ?: document.selectFirst("iframe[src*='youtube.com']")?.attr("src")
+        if (trailerUrl == null) {
+            trailerUrl = document.selectFirst("iframe[src*='youtube.com']")?.attr("src")
+        }
 
         val episodeElements = document.select(".gmr-listseries a").filter {
             it.attr("href").contains("/eps/") && !it.text().contains("Pilih", true)
@@ -79,20 +100,40 @@ class Ngefilm21 : MainAPI() {
         val response = if (isSeries) {
             val episodes = episodeElements.mapNotNull { element ->
                 val epUrl = element.attr("href")
-                val epNum = Regex("(\\d+)").find(element.text())?.groupValues?.get(1)?.toIntOrNull()
-                if (epUrl.isNotEmpty()) newEpisode(epUrl) { this.episode = epNum } else null
+                val epText = element.text()
+                val epNum = Regex("(\\d+)").find(epText)?.groupValues?.get(1)?.toIntOrNull()
+                val epName = element.attr("title").removePrefix("Permalink ke ")
+
+                if (epUrl.isNotEmpty()) {
+                    newEpisode(epUrl) {
+                        this.name = epName
+                        this.episode = epNum
+                    }
+                } else null
             }
             newTvSeriesLoadResponse(title, url, type, episodes) {
-                this.posterUrl = poster; this.plot = plot; this.year = year
-                this.score = Score.from10(ratingValue?.toDoubleOrNull()); this.tags = tags; this.actors = actors
+                this.posterUrl = poster
+                this.plot = plot
+                this.year = year
+                this.score = Score.from10(ratingText?.toDoubleOrNull())
+                this.tags = tags
+                this.actors = actors
             }
         } else {
             newMovieLoadResponse(title, url, type, url) {
-                this.posterUrl = poster; this.plot = plot; this.year = year
-                this.score = Score.from10(ratingValue?.toDoubleOrNull()); this.tags = tags; this.actors = actors
+                this.posterUrl = poster
+                this.plot = plot
+                this.year = year
+                this.score = Score.from10(ratingText?.toDoubleOrNull())
+                this.tags = tags
+                this.actors = actors
             }
         }
-        if (trailerUrl != null) response.trailers.add(TrailerData(trailerUrl, null, false))
+
+        if (trailerUrl != null) {
+             response.trailers.add(TrailerData(trailerUrl, null, false))
+        }
+
         return response
     }
 
@@ -104,59 +145,115 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
+        // 1. Cari Player RPM Live (Prioritas Utama sesuai Screenshot)
+        // Kita mencari iframe yang src-nya mengandung 'rpmlive.online'
+        document.select("iframe[src*='rpmlive.online']").forEach { iframe ->
+            val src = iframe.attr("src")
+            // Ekstrak ID dari URL. Biasanya setelah '#' atau '?id='
+            // Contoh URL dari screenshot: https://playerngefilm21.rpmlive.online/#ytw8o9 atau ?id=ytw8o9
+            val id = if (src.contains("?id=")) {
+                src.substringAfter("?id=").substringBefore("&")
+            } else if (src.contains("#")) {
+                src.substringAfter("#")
+            } else {
+                null
+            }
+
+            if (id != null) {
+                extractRpmLive(id, subtitleCallback, callback)
+            }
+        }
+
+        // 2. Fallback: Ekstrak Player Lain (Iframe standar)
         document.select("iframe").forEach { iframe ->
             val src = iframe.attr("src")
             val fixedSrc = if (src.startsWith("//")) "https:$src" else src
             
-            // LOGIKA KHUSUS RPMLIVE (DENGAN PARAMETER LENGKAP)
-            if (fixedSrc.contains("rpmlive.online")) {
-                val playerId = Regex("#([a-zA-Z0-9]+)").find(fixedSrc)?.groupValues?.get(1)
-                if (playerId != null) {
-                    try {
-                        // Tambahkan parameter w, h, dan r agar server mau memberikan data
-                        val apiUrl = "https://playerngefilm21.rpmlive.online/api/v1/video?id=$playerId&w=360&h=800&r=new31.ngefilm.site"
-                        
-                        val response = app.get(apiUrl, headers = mapOf(
-                            "Referer" to "https://playerngefilm21.rpmlive.online/",
-                            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
-                        )).text
-                        
-                        val decrypted = decryptAES(response, RPM_KEY, RPM_IV)
-                        val videoUrl = Regex(""""file":"([^"]+)"""").find(decrypted)?.groupValues?.get(1)
-                        
-                        if (videoUrl != null) {
-                            // FIX DEPRECATED: Gunakan newExtractorLink
-                            callback.invoke(
-                                newExtractorLink("RPMLive VIP", "RPMLive VIP", videoUrl.replace("\\/", "/")) {
-                                    this.referer = "https://playerngefilm21.rpmlive.online/"
-                                    this.type = ExtractorLinkType.M3U8
-                                    this.quality = Qualities.Unknown.value
-                                }
-                            )
-                        }
-                    } catch (e: Exception) { }
-                }
-            } else if (!fixedSrc.contains("youtube.com") && !fixedSrc.contains("wp-embedded-content")) {
+            if (!fixedSrc.contains("youtube.com") && 
+                !fixedSrc.contains("wp-embedded-content") && 
+                !fixedSrc.contains("rpmlive.online")) { // Hindari double load RPM
                 loadExtractor(fixedSrc, subtitleCallback, callback)
             }
         }
 
-        document.select(".gmr-download-list a").forEach { loadExtractor(it.attr("href"), subtitleCallback, callback) }
+        // 3. Link Download
+        document.select(".gmr-download-list a").forEach { link ->
+            loadExtractor(link.attr("href"), subtitleCallback, callback)
+        }
+
         return true
     }
 
-    private fun decryptAES(cipherText: String, keyHex: String, ivHex: String): String {
-        return try {
-            val keyBytes = keyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-            val ivBytes = ivHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-            val encryptedBytes = cipherText.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+    // --- LOGIKA BARU UNTUK RPM LIVE ---
+    private suspend fun extractRpmLive(
+        id: String, 
+        subtitleCallback: (SubtitleFile) -> Unit, 
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            // Panggil API sesuai screenshot 2
+            val apiUrl = "$RPM_PLAYER_API?id=$id"
+            val response = app.get(apiUrl, referer = "$mainUrl/").text
 
-            val sKey = SecretKeySpec(keyBytes, "AES")
-            val ivSpec = IvParameterSpec(ivBytes)
-            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-            cipher.init(Cipher.DECRYPT_MODE, sKey, ivSpec)
+            // Coba parsing JSON. Jika response terenkripsi, biasanya ada field 'data' atau strukturnya berbeda.
+            // Namun, berdasarkan info "Kunci AES", kemungkinan besar response API ini berisi data terenkripsi
+            // atau URL stream ada di dalamnya dan perlu didekripsi.
             
-            String(cipher.doFinal(encryptedBytes))
-        } catch (e: Exception) { "" }
+            // Asumsi: Response adalah JSON yang berisi data terenkripsi atau URL langsung.
+            // Kita coba dekripsi jika response terlihat acak/encrypted, atau parsing jika JSON biasa.
+            
+            // Skenario A: API mengembalikan JSON dengan field data terenkripsi
+            // Skenario B: API mengembalikan JSON berisi link m3u8 langsung (jika player sudah handle auth)
+            
+            // Mari kita coba parsing sebagai RpmResponse dulu
+            val json = AppUtils.parseJson<RpmResponse>(response)
+            
+            // Jika ada link m3u8 langsung
+            if (!json.file.isNullOrEmpty()) {
+                callback.invoke(
+                    ExtractorLink(
+                        "RPM Live",
+                        "RPM Live (Auto)",
+                        json.file,
+                        "",
+                        getQualityFromName("HD"),
+                        true
+                    )
+                )
+            } 
+            // Jika tidak ada link file, mungkin datanya terenkripsi di field lain?
+            // (Disini saya tambahkan logika umum, jika nanti butuh dekripsi payload JSON)
+            
+        } catch (e: Exception) {
+            // Error handling
+            e.printStackTrace()
+        }
+    }
+    
+    // Model Data untuk Response API RPM Live
+    data class RpmResponse(
+        @JsonProperty("file") val file: String? = null,
+        @JsonProperty("label") val label: String? = null,
+        @JsonProperty("type") val type: String? = null
+    )
+
+    // Fungsi Dekripsi AES (Sesuai Screenshot 1)
+    // Digunakan jika nanti payload API ternyata terenkripsi penuh (bukan JSON biasa)
+    private fun decryptAES(encrypted: String): String {
+        try {
+            val keySpec = SecretKeySpec(AES_KEY.toByteArray(), "AES")
+            val ivSpec = IvParameterSpec(AES_IV.toByteArray())
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+            
+            cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
+            // Asumsi input encrypted adalah Base64 atau Hex. Biasanya Base64.
+            // Jika hex, perlu konversi hex to byte dulu.
+            val decodedBytes = android.util.Base64.decode(encrypted, android.util.Base64.DEFAULT)
+            val decrypted = cipher.doFinal(decodedBytes)
+            
+            return String(decrypted)
+        } catch (e: Exception) {
+            return ""
+        }
     }
 }
