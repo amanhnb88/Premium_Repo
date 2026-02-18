@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
+// --- PROVIDER UTAMA ---
 class Ngefilm21 : MainAPI() {
     override var mainUrl = "https://new31.ngefilm.site"
     override var name = "Ngefilm21"
@@ -15,26 +16,18 @@ class Ngefilm21 : MainAPI() {
         TvType.AsianDrama
     )
 
-    // --- FIX POSTER KUALITAS TERBAIK ---
+    // Helper untuk poster resolusi tinggi
     private fun Element.getImageAttr(): String? {
-        // 1. Coba ambil dari srcset (biasanya berisi daftar ukuran gambar)
         val srcset = this.attr("srcset")
         if (srcset.isNotEmpty()) {
             return try {
-                // Format srcset: "url1 width1, url2 width2, ..."
-                // Kita split, ambil width-nya, urutkan dari terbesar, ambil URL-nya
                 srcset.split(",")
                     .map { it.trim().split(" ") }
-                    .filter { it.size >= 2 } // Pastikan ada url dan width
-                    .maxByOrNull { it[1].replace("w", "").toIntOrNull() ?: 0 } // Cari width terbesar
-                    ?.get(0) // Ambil URL-nya
-            } catch (e: Exception) {
-                // Jika gagal parsing, lanjut ke bawah
-                this.attr("src")
-            }
+                    .filter { it.size >= 2 }
+                    .maxByOrNull { it[1].replace("w", "").toIntOrNull() ?: 0 }
+                    ?.get(0)
+            } catch (e: Exception) { this.attr("src") }
         }
-        
-        // 2. Fallback: Ambil src biasa jika srcset kosong
         return this.attr("data-src").ifEmpty { this.attr("src") }
     }
 
@@ -48,10 +41,7 @@ class Ngefilm21 : MainAPI() {
         val titleElement = this.selectFirst(".entry-title a") ?: return null
         val title = titleElement.text()
         val href = titleElement.attr("href")
-        
-        // GUNAKAN FUNGSI FIX POSTER DI SINI
         val posterUrl = this.selectFirst(".content-thumbnail img")?.getImageAttr()
-        
         val quality = this.selectFirst(".gmr-quality-item a")?.text() ?: "HD"
         val ratingText = this.selectFirst(".gmr-rating-item")?.text()?.trim()
 
@@ -71,10 +61,7 @@ class Ngefilm21 : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: ""
-        
-        // GUNAKAN FUNGSI FIX POSTER DI SINI JUGA
         val poster = document.selectFirst(".gmr-movie-data figure img")?.getImageAttr()
-        
         val plot = document.selectFirst("div.entry-content[itemprop='description'] p")?.text()?.trim()
         val year = document.selectFirst(".gmr-moviedata:contains(Tahun) a")?.text()?.trim()?.toIntOrNull()
         val ratingText = document.selectFirst("span[itemprop='ratingValue']")?.text()?.trim()
@@ -143,69 +130,83 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val rawHtml = app.get(data).text
 
-        // --- SERVER 4 (KRAKENFILES) ---
-        // Pola: src="https://krakenfiles.com/embed-video/ID"
+        // --- PANGGIL CUSTOM EXTRACTOR (NgefilmKraken) ---
+        // Cari URL Embed Kraken: https://krakenfiles.com/embed-video/ID
         val krakenRegex = Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""")
         
         krakenRegex.findAll(rawHtml).forEach { match ->
             val embedUrl = match.groupValues[1]
-            
-            // 1. Coba serahkan ke CloudStream (Bawaan)
-            // Ini menggunakan ExtractorApi.kt yang kamu kirim
-            loadExtractor(embedUrl, subtitleCallback, callback)
-
-            // 2. Coba Manual sebagai Backup (Jika bawaan gagal)
-            extractKrakenManual(embedUrl, callback)
+            // Panggil class extractor khusus kita di bawah
+            NgefilmKraken().getUrl(embedUrl, null, subtitleCallback, callback)
         }
 
-        // --- Fallback Iframe Umum ---
+        // --- Fallback untuk Iframe Umum ---
         val document = org.jsoup.Jsoup.parse(rawHtml)
         document.select("iframe").forEach { iframe ->
             val src = iframe.attr("src")
             val fixedSrc = if (src.startsWith("//")) "https:$src" else src
             
-            if (!fixedSrc.contains("youtube.com") && 
-                !fixedSrc.contains("krakenfiles.com")) { // Kraken sudah dihandle regex di atas
+            // Hindari double process untuk Kraken (karena sudah dihandle NgefilmKraken)
+            if (!fixedSrc.contains("krakenfiles.com") && !fixedSrc.contains("youtube.com")) { 
                 loadExtractor(fixedSrc, subtitleCallback, callback)
             }
         }
 
         return true
     }
+}
 
-    private suspend fun extractKrakenManual(url: String, callback: (ExtractorLink) -> Unit) {
-        try {
-            val headers = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-                "Referer" to "https://new31.ngefilm.site/",
-                "Origin" to "https://new31.ngefilm.site"
+// --- CUSTOM EXTRACTOR KHUSUS KRAKEN ---
+// Ini meniru struktur Krakenfiles.kt tetapi dengan Headers & Regex yang sudah kita perbaiki
+open class NgefilmKraken : ExtractorApi() {
+    override val name = "Krakenfiles (Custom)"
+    override val mainUrl = "https://krakenfiles.com"
+    override val requiresReferer = false
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        // Headers ini WAJIB agar tidak diblokir (Sama seperti Script Python)
+        val customHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+            "Referer" to "https://new31.ngefilm.site/",
+            "Origin" to "https://new31.ngefilm.site",
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+        )
+
+        // Request ke halaman embed dengan headers yang benar
+        val response = app.get(url, headers = customHeaders).text
+
+        // Regex V2: Mencari pola link video yang valid (bukan .mp4 text biasa)
+        // Sesuai temuan: src="https://phs9.krakencloud.net/play/video/..."
+        val videoRegex = Regex("""src=["'](https:[^"']+/play/video/[^"']+)["']""")
+        val match = videoRegex.find(response)
+        
+        // Backup Regex jika pola pertama gagal (kadang di data-src-url)
+        val finalUrl = if (match != null) {
+            match.groupValues[1]
+        } else {
+            Regex("""data-src-url=["'](https:[^"']+)["']""").find(response)?.groupValues?.get(1)
+        }
+
+        if (finalUrl != null) {
+            // Bersihkan URL dari backslash (jika ada)
+            val cleanUrl = finalUrl.replace("\\", "")
+            
+            callback.invoke(
+                newExtractorLink(
+                    this.name,
+                    this.name,
+                    [span_2](start_span)httpsify(cleanUrl), //[span_2](end_span)
+                    [span_3](start_span)ExtractorLinkType.VIDEO //[span_3](end_span)
+                ) {
+                    [span_4](start_span)this.referer = url //[span_4](end_span)
+                    [span_5](start_span)this.quality = Qualities.Unknown.value //[span_5](end_span) - Memperbaiki error parameter 'quality'
+                }
             )
-
-            val responseText = app.get(url, headers = headers).text
-
-            // Pola HTML Kraken: <source src="https://..." type="video/mp4">
-            // Kita pakai Regex yang sedikit lebih longgar untuk menangkap URL
-            val videoRegex = Regex("""<source[^>]+src=["'](https:[^"']+)["']""")
-            val match = videoRegex.find(responseText)
-
-            if (match != null) {
-                var videoUrl = match.groupValues[1]
-                videoUrl = videoUrl.replace("&amp;", "&") // Fix HTML entities
-
-                callback.invoke(
-                    newExtractorLink(
-                        source = "Krakenfiles",
-                        name = "Krakenfiles (Backup)",
-                        url = videoUrl,
-                        type = ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = url
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
     }
 }
