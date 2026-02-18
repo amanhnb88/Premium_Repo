@@ -139,17 +139,21 @@ class Ngefilm21 : MainAPI() {
                 async {
                     try {
                         val fixedUrl = if (playerUrl.startsWith("http")) playerUrl else "$mainUrl$playerUrl"
+                        System.out.println("NGEFILM CHECK: $fixedUrl")
                         val pageContent = app.get(fixedUrl, headers = mapOf("User-Agent" to UA_BROWSER)).text 
 
                         // [SERVER 1] RPM LIVE
                         val rpmMatch = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""").find(pageContent)
                         rpmMatch?.let { extractRpm(it.groupValues[1].ifEmpty { it.groupValues[2] }, callback) }
 
-                        // [SERVER 3] VIBUXER / HGLINK / MASUKESTIN
-                        val vibuxerRegex = Regex("""(?:src|href)=["'](https://(?:hglink\.(?:to|com|net)|vibuxer\.(?:com|net|to)|masukestin\.(?:com|net))/e/[a-zA-Z0-9]+)["']""")
+                        // [SERVER 3] VIBUXER / HGLINK / MASUKESTIN (FIXED REGEX CASE-INSENSITIVE)
+                        // (?i) = Ignore Case (Cocok untuk src=, SRC=, Href=, dll)
+                        val vibuxerRegex = Regex("""(?i)(?:src|href)\s*=\s*["'](https://(?:hglink\.(?:to|com|net)|vibuxer\.(?:com|net|to)|masukestin\.(?:com|net))/e/[a-zA-Z0-9]+)["']""")
                         vibuxerRegex.findAll(pageContent).forEach { 
                             val rawUrl = it.groupValues[1]
-                            // Paksa replace domain ke masukestin agar API call berhasil
+                            System.out.println("NGEFILM FOUND MASUKESTIN: $rawUrl")
+                            
+                            // Paksa ganti ke domain masukestin.com agar API call valid
                             val targetUrl = rawUrl.replace("hglink.to", "masukestin.com")
                                                   .replace("hglink.net", "masukestin.com")
                                                   .replace("vibuxer.com", "masukestin.com")
@@ -179,14 +183,15 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
-    // --- MASUKESTIN / HGLINK LOGIC (UPDATED & FIXED) ---
+    // --- MASUKESTIN / HGLINK LOGIC ---
     private suspend fun extractMasukestin(url: String, callback: (ExtractorLink) -> Unit) {
         try {
             val domain = "masukestin.com" 
             
+            // Header harus mirip browser
             val response = app.get(url, headers = mapOf(
                 "User-Agent" to UA_BROWSER,
-                "Referer" to "https://new31.ngefilm.site/",
+                "Referer" to "https://new31.ngefilm.site/", 
                 "Origin" to "https://hglink.to",
                 "Upgrade-Insecure-Requests" to "1"
             ))
@@ -203,62 +208,66 @@ class Ngefilm21 : MainAPI() {
 
             if (packedCode != null) {
                 val unpackedJs = Unpacker.unpack(packedCode)
+                System.out.println("NGEFILM UNPACKED SUCCESS")
 
-                // 3. Cari HASH
-                val hashMatch = Regex("""hash\s*:\s*["']([^"']+)["']""").find(unpackedJs)
-                val hash = hashMatch?.groupValues?.get(1)
+                // [METODE 1] Cari Link langsung di hasil unpack (Paling Cepat & Akurat)
+                // Menangkap link relatif (/stream/...) atau absolute (https://...)
+                var linkM3u8 = Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""").find(unpackedJs)?.groupValues?.get(1)
 
-                if (hash != null) {
-                    val apiUrl = "https://$domain/dl?op=view&file_code=$videoId&hash=$hash&embed=1&referer=hglink.to"
-                    
-                    val apiRes = app.get(apiUrl, headers = mapOf(
-                        "User-Agent" to UA_BROWSER,
-                        "Referer" to url,
-                        "X-Requested-With" to "XMLHttpRequest"
-                    ), cookies = cookies).text 
+                // [METODE 2] Backup pakai API jika metode 1 gagal
+                if (linkM3u8 == null) {
+                    val hashMatch = Regex("""hash\s*:\s*["']([^"']+)["']""").find(unpackedJs)
+                    val hash = hashMatch?.groupValues?.get(1)
 
-                    // [FIXED] REGEX YANG LEBIH LUAS + RELATIVE URL HANDLER
-                    // Menangkap link yang mungkin tidak diawali https
-                    var linkM3u8 = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(apiRes)?.groupValues?.get(1)
-                        ?: Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(apiRes)?.groupValues?.get(1)
-
-                    if (linkM3u8 != null) {
-                        // Bersihkan escape char
-                        linkM3u8 = linkM3u8.replace("\\/", "/")
+                    if (hash != null) {
+                        val apiUrl = "https://$domain/dl?op=view&file_code=$videoId&hash=$hash&embed=1&referer=hglink.to"
+                        val apiRes = app.get(apiUrl, headers = mapOf(
+                            "User-Agent" to UA_BROWSER,
+                            "Referer" to url,
+                            "X-Requested-With" to "XMLHttpRequest"
+                        ), cookies = cookies).text 
                         
-                        // [FIXED] Tangani URL relatif (/stream/...)
-                        if (linkM3u8.startsWith("/")) {
-                            linkM3u8 = "https://$domain$linkM3u8"
-                        }
-
-                        callback.invoke(
-                            newExtractorLink(
-                                "Masukestin",
-                                "Masukestin (Server 3)",
-                                linkM3u8,
-                                ExtractorLinkType.M3U8
-                            ) {
-                                this.headers = mapOf(
-                                    "User-Agent" to UA_BROWSER,
-                                    "Referer" to "https://$domain/",
-                                    "Origin" to "https://$domain"
-                                )
-                            }
-                        )
+                        linkM3u8 = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(apiRes)?.groupValues?.get(1)
                     }
                 }
+
+                if (linkM3u8 != null) {
+                    linkM3u8 = linkM3u8!!.replace("\\/", "/")
+                    
+                    // Handle URL Relatif (Penting untuk Masukestin!)
+                    if (linkM3u8!!.startsWith("/")) {
+                        linkM3u8 = "https://$domain$linkM3u8"
+                    }
+
+                    System.out.println("NGEFILM FINAL M3U8: $linkM3u8")
+
+                    callback.invoke(
+                        newExtractorLink(
+                            "Masukestin",
+                            "Masukestin (Server 3)",
+                            linkM3u8!!,
+                            ExtractorLinkType.M3U8
+                        ) {
+                            this.headers = mapOf(
+                                "User-Agent" to UA_BROWSER,
+                                "Referer" to "https://$domain/",
+                                "Origin" to "https://$domain"
+                            )
+                        }
+                    )
+                }
             } else {
-                // Fallback (Direct regex di HTML jika tidak dipacking)
+                // Fallback direct regex di HTML
                 var directM3u8 = Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""").find(doc)?.groupValues?.get(1)
                 if (directM3u8 != null) {
-                     directM3u8 = directM3u8.replace("\\/", "/")
-                     if (directM3u8.startsWith("/")) directM3u8 = "https://$domain$directM3u8"
+                     directM3u8 = directM3u8!!.replace("\\/", "/")
+                     if (directM3u8!!.startsWith("/")) directM3u8 = "https://$domain$directM3u8"
                      
                      callback.invoke(
                         newExtractorLink(
                             "Masukestin",
                             "Masukestin (Direct)",
-                            directM3u8,
+                            directM3u8!!,
                             ExtractorLinkType.M3U8
                         ) {
                             this.headers = mapOf("User-Agent" to UA_BROWSER, "Referer" to "https://$domain/")
@@ -266,7 +275,10 @@ class Ngefilm21 : MainAPI() {
                     )
                 }
             }
-        } catch (e: Exception) { e.printStackTrace() }
+        } catch (e: Exception) { 
+            e.printStackTrace()
+            System.out.println("NGEFILM ERROR: ${e.message}")
+        }
     }
 
     object Unpacker {
