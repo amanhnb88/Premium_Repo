@@ -78,7 +78,10 @@ class Ngefilm21 : MainAPI() {
         val episodeElements = document.select(".gmr-listseries a").filter {
             it.attr("href").contains("/eps/") && !it.text().contains("Pilih", true)
         }
+        
         val isSeries = episodeElements.isNotEmpty()
+        // --- FIX: DEFINISI TYPE DI SINI ---
+        val type = if (isSeries) TvType.TvSeries else TvType.Movie 
 
         if (isSeries) {
             val episodes = episodeElements.mapNotNull { element ->
@@ -92,7 +95,7 @@ class Ngefilm21 : MainAPI() {
                 this.score = Score.from10(ratingText?.toDoubleOrNull()); this.tags = tags; this.actors = actors
             }
         } else {
-            return newMovieLoadResponse(title, url, TvType.Movie, url) {
+            return newMovieLoadResponse(title, url, type, url) {
                 this.posterUrl = poster; this.plot = plot; this.year = year
                 this.score = Score.from10(ratingText?.toDoubleOrNull()); this.tags = tags; this.actors = actors
                 if (trailerUrl != null) this.trailers.add(TrailerData(trailerUrl, null, false))
@@ -111,7 +114,8 @@ class Ngefilm21 : MainAPI() {
         val playerLinks = document.select(".muvipro-player-tabs a").mapNotNull { it.attr("href") }.toMutableList()
         if (playerLinks.isEmpty()) playerLinks.add(data)
 
-        // 2. Loop setiap Tab (Server 1, 2, 3, 4...) menggunakan ASYNC (Pengganti apmap)
+        // 2. Loop setiap Tab (Server 1, 2, 3, 4...)
+        // MENGGUNAKAN ASYNC (Agar tidak kena error 'apmap deprecated' dan tidak bikin lag)
         coroutineScope {
             playerLinks.distinct().map { playerUrl ->
                 async {
