@@ -19,7 +19,7 @@ class Ngefilm21 : MainAPI() {
         TvType.AsianDrama
     )
 
-    // --- KONFIGURASI ENKRIPSI RPM (Cadangan) ---
+    // --- KONFIGURASI API & ENKRIPSI RPM ---
     private val RPM_BASE_API = "https://playerngefilm21.rpmlive.online/api/v1"
     private val AES_KEY = "kiemtienmua911ca"
     private val AES_IV = "1234567890oiuytr"
@@ -128,29 +128,27 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val rawHtml = app.get(data).text
 
-        // --- PRIORITAS 1: SERVER 4 (KRAKENFILES) ---
-        // Paling stabil & didukung native
-        Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""").findAll(rawHtml).forEach { match ->
-            loadExtractor(match.groupValues[1], subtitleCallback, callback)
-        }
-
-        // --- PRIORITAS 2: SERVER 2 (ABYSS/SHORT.ICU) ---
-        // Bongkar manual untuk dapat MP4
+        // --- 1. SERVER 2: AbyssCDN / Short.icu ---
         Regex("""src=["'](https://short\.icu/[^"']+)["']""").findAll(rawHtml).forEach { match ->
             extractAbyssCdn(match.groupValues[1], callback)
         }
 
-        // --- PRIORITAS 3: SERVER 5 (MIXDROP/XSHOTCOK) ---
-        Regex("""src=["'](https://(?:xshotcok\.com|mixdrop\.[a-z]+)/embed-[^"']+)["']""").findAll(rawHtml).forEach { match ->
+        // --- 2. SERVER 4: Krakenfiles ---
+        Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""").findAll(rawHtml).forEach { match ->
             loadExtractor(match.groupValues[1], subtitleCallback, callback)
         }
 
-        // --- PRIORITAS 4: SERVER 3 (VIBUXER) ---
+        // --- 3. SERVER 3: Vibuxer / Hgcloud ---
         Regex("""src=["'](https://(?:hgcloud\.to|vibuxer\.com)/e/[^"']+)["']""").findAll(rawHtml).forEach { match ->
             extractVibuxer(match.groupValues[1], callback)
         }
 
-        // --- CADANGAN: SERVER 1 (RPM LIVE) ---
+        // --- 4. SERVER 5: MixDrop / Xshotcok ---
+        Regex("""src=["'](https://(?:xshotcok\.com|mixdrop\.[a-z]+)/embed-[^"']+)["']""").findAll(rawHtml).forEach { match ->
+            loadExtractor(match.groupValues[1], subtitleCallback, callback)
+        }
+
+        // --- 5. SERVER 1: RPM Live (Cadangan) ---
         val rpmRegex = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""")
         val rpmMatch = rpmRegex.find(rawHtml)
         if (rpmMatch != null) {
@@ -158,7 +156,7 @@ class Ngefilm21 : MainAPI() {
             if (id.isNotEmpty()) extractRpmGenerator(id, callback)
         }
 
-        // --- FALLBACK: IFRAME LAIN ---
+        // --- 6. Fallback Iframe Umum ---
         val document = org.jsoup.Jsoup.parse(rawHtml)
         document.select(".gmr-download-list a").forEach { link ->
             loadExtractor(link.attr("href"), subtitleCallback, callback)
@@ -167,7 +165,6 @@ class Ngefilm21 : MainAPI() {
             val src = iframe.attr("src")
             val fixedSrc = if (src.startsWith("//")) "https:$src" else src
             
-            // Hindari double processing
             if (!fixedSrc.contains("youtube.com") && 
                 !fixedSrc.contains("rpmlive.online") && 
                 !fixedSrc.contains("short.icu") &&
@@ -183,7 +180,7 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
-    // --- LOGIKA MANUAL: SERVER 2 (Abyss) ---
+    // --- EKSTRAKTOR SERVER 2 (AbyssCDN) ---
     private suspend fun extractAbyssCdn(shortUrl: String, callback: (ExtractorLink) -> Unit) {
         try {
             val id = shortUrl.substringAfterLast("/")
@@ -195,30 +192,33 @@ class Ngefilm21 : MainAPI() {
                 callback.invoke(
                     newExtractorLink(
                         source = "AbyssCDN",
-                        name = "Server 2 (Abyss)",
+                        name = "AbyssCDN (Server 2)",
                         url = match.groupValues[1],
-                        type = ExtractorLinkType.VIDEO,
-                        quality = Qualities.Unknown.value
-                    )
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.quality = Qualities.Unknown.value // Perbaikan disini: quality masuk ke dalam block
+                    }
                 )
             }
         } catch (e: Exception) { e.printStackTrace() }
     }
 
-    // --- LOGIKA MANUAL: SERVER 3 (Vibuxer) ---
+    // --- EKSTRAKTOR SERVER 3 (Vibuxer / Hgcloud) ---
     private suspend fun extractVibuxer(embedUrl: String, callback: (ExtractorLink) -> Unit) {
         try {
             val headers = mapOf("Referer" to "https://new31.ngefilm.site/", "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36")
             val response = app.get(embedUrl, headers = headers).text
+            
             Regex("""file:\s*["'](https?://[^"']+(?:\.m3u8|\.txt)[^"']*)["']""").findAll(response).forEach { match ->
+                val streamUrl = match.groupValues[1]
                 callback.invoke(
                     newExtractorLink(
                         source = "Vibuxer",
-                        name = "Server 3 (Vibuxer)",
-                        url = match.groupValues[1],
-                        type = ExtractorLinkType.M3U8,
-                        quality = Qualities.Unknown.value
+                        name = "Vibuxer (Server 3)",
+                        url = streamUrl,
+                        type = ExtractorLinkType.M3U8
                     ) {
+                        this.quality = Qualities.Unknown.value // Perbaikan disini: quality masuk ke dalam block
                         this.referer = "https://vibuxer.com/"
                         this.headers = mapOf("Origin" to "https://vibuxer.com")
                     }
@@ -227,7 +227,7 @@ class Ngefilm21 : MainAPI() {
         } catch (e: Exception) { e.printStackTrace() }
     }
 
-    // --- LOGIKA MANUAL: SERVER 1 (RPM) ---
+    // --- EKSTRAKTOR SERVER 1 (RPM Live) ---
     private suspend fun extractRpmGenerator(videoId: String, callback: (ExtractorLink) -> Unit) {
         try {
             val commonHeaders = mapOf(
@@ -252,7 +252,9 @@ class Ngefilm21 : MainAPI() {
             val tokenHex = encryptAES(jsonString)
 
             val playerUrl = "$RPM_BASE_API/player?t=$tokenHex"
-            val encryptedResponse = app.get(playerUrl, headers = commonHeaders, cookies = sessionCookies).text.replace(Regex("[^0-9a-fA-F]"), "")
+            val playerHeaders = commonHeaders.toMutableMap()
+            
+            val encryptedResponse = app.get(playerUrl, headers = playerHeaders, cookies = sessionCookies).text.replace(Regex("[^0-9a-fA-F]"), "")
             val decryptedFinal = decryptHexAES(encryptedResponse)
             
             if (decryptedFinal.isNotEmpty()) {
@@ -262,7 +264,7 @@ class Ngefilm21 : MainAPI() {
                     callback.invoke(
                         newExtractorLink(
                             source = "RPM Live",
-                            name = "Server 1 (RPM)",
+                            name = "RPM Live (Server 1)",
                             url = linkMatch.groupValues[1].replace("\\/", "/"),
                             type = ExtractorLinkType.M3U8
                         ) {
