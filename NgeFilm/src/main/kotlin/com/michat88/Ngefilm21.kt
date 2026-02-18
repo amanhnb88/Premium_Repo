@@ -40,7 +40,7 @@ class Ngefilm21 : MainAPI() {
 
     // --- DAFTAR KATEGORI ---
     private val categories = listOf(
-        Pair("Upload Terbaru", ""), // Kosong berarti halaman utama
+        Pair("Upload Terbaru", ""), 
         Pair("Indonesia Movie", "/country/indonesia"),
         Pair("Indonesia Series", "/?s=&search=advanced&post_type=tv&index=&orderby=&genre=&movieyear=&country=indonesia&quality="),
         Pair("Drakor", "/?s=&search=advanced&post_type=tv&index=&orderby=&genre=drama&movieyear=&country=korea&quality="),
@@ -50,11 +50,9 @@ class Ngefilm21 : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        // FIX: Mengganti apmap dengan coroutineScope + async + awaitAll
         val homeItems = coroutineScope {
             categories.map { (title, urlPath) ->
                 async {
-                    // Logika Pembentukan URL Halaman (Pagination)
                     val finalUrl = if (urlPath.isEmpty()) {
                         "$mainUrl/page/$page/"
                     } else if (urlPath.contains("?")) {
@@ -84,9 +82,16 @@ class Ngefilm21 : MainAPI() {
     private fun Element.toSearchResult(): SearchResponse? {
         val title = this.selectFirst(".entry-title a")?.text() ?: return null
         val href = this.selectFirst(".entry-title a")?.attr("href") ?: ""
+        
+        // --- FIX LOGO QUALITY ---
+        // Kita ambil text langsung dari class "gmr-quality-item"
+        // .trim() untuk menghapus spasi, .ifEmpty untuk jaga-jaga kalau kosong diisi "HD"
+        val qualityText = this.selectFirst(".gmr-quality-item")?.text()?.trim() ?: "HD"
+        
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = this@toSearchResult.selectFirst(".content-thumbnail img")?.getImageAttr()
-            addQuality(this@toSearchResult.selectFirst(".gmr-quality-item a")?.text() ?: "HD")
+            // Masukkan kualitas ke poster
+            addQuality(qualityText.ifEmpty { "HD" })
         }
     }
 
@@ -142,7 +147,7 @@ class Ngefilm21 : MainAPI() {
                             extractKrakenManual(it.groupValues[1], callback) 
                         }
 
-                        // [SERVER 2] ABYSS - REDIRECT
+                        // [SERVER 2] ABYSS
                         Regex("""src=["'](https://short\.icu/[^"']+)["']""").findAll(pageContent).forEach { 
                             val finalUrl = app.get(it.groupValues[1], headers = mapOf("Referer" to fixedUrl)).url
                             if (finalUrl.contains("abyss")) loadExtractor(finalUrl, subtitleCallback, callback)
