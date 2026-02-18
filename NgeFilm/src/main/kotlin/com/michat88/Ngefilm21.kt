@@ -21,7 +21,6 @@ class Ngefilm21 : MainAPI() {
 
     // --- KONFIGURASI API & ENKRIPSI ---
     private val RPM_BASE_API = "https://playerngefilm21.rpmlive.online/api/v1"
-    // Kunci & IV Abadi (Hasil Sniper)
     private val AES_KEY = "kiemtienmua911ca"
     private val AES_IV = "1234567890oiuytr"
 
@@ -127,22 +126,31 @@ class Ngefilm21 : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // [DEBUG]
+        // showToast("Memuat: $data")
+        
         val rawHtml = app.get(data).text
+        
+        // [DEBUG] Cek apakah HTML kosong
+        // if (rawHtml.length < 100) showToast("HTML Kosong/Error!")
 
-        // 1. Deteksi ID RPM Live (Target Utama)
-        // Pola: rpmlive.online/...#ID atau ?id=ID
+        // 1. Ekstrak ID dari RPM Live
         val rpmRegex = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""")
         val rpmMatch = rpmRegex.find(rawHtml)
         
         if (rpmMatch != null) {
             val id = rpmMatch.groupValues[1].ifEmpty { rpmMatch.groupValues[2] }
             if (id.isNotEmpty()) {
-                // JALANKAN LOGIKA GENERATOR TOKEN
+                // [DEBUG]
+                // showToast("ID Ketemu: $id")
                 extractRpmGenerator(id, callback)
             }
+        } else {
+            // [DEBUG] Jika ID tidak ketemu, coba cari iframe manual untuk memastikan
+            // val iframeCount = rawHtml.count { it == 'i' } // Dummy logic
+            // showToast("ID RPM tidak ditemukan di halaman ini.")
         }
 
-        // 2. Link Download & Server Lain (Fallback)
         val document = org.jsoup.Jsoup.parse(rawHtml)
         document.select(".gmr-download-list a").forEach { link ->
             loadExtractor(link.attr("href"), subtitleCallback, callback)
@@ -158,7 +166,6 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
-    // --- LOGIKA UTAMA: Info -> Buat Token -> Player -> Video ---
     private suspend fun extractRpmGenerator(
         videoId: String, 
         callback: (ExtractorLink) -> Unit
@@ -171,48 +178,37 @@ class Ngefilm21 : MainAPI() {
                 "Accept" to "*/*"
             )
 
-            // STEP 1: Ambil Info Terenkripsi dari /api/v1/info
             val infoUrl = "$RPM_BASE_API/info?id=$videoId"
             val infoResponse = app.get(infoUrl, headers = commonHeaders)
-            
-            // Simpan Cookies (PENTING!)
             val sessionCookies = infoResponse.cookies
             
-            // Bersihkan dan dekripsi respons info
             val rawInfoHex = infoResponse.text.replace(Regex("[^0-9a-fA-F]"), "")
-            val decryptedInfo = decryptHexAES(rawInfoHex)
             
-            // Ambil 'playerId' menggunakan REGEX (Bukan parse JSON biasa, biar anti-error)
-            // Pola: "playerId" : "XXXX"
+            // [DEBUG]
+            // if (rawInfoHex.isEmpty()) showToast("Gagal ambil Hex Info")
+
+            val decryptedInfo = decryptHexAES(rawInfoHex)
             val playerIdMatch = Regex(""""playerId"\s*:\s*"([^"]+)"""").find(decryptedInfo)
             val playerId = playerIdMatch?.groupValues?.get(1) ?: return 
 
-            // STEP 2: RACIK TOKEN JSON SECARA MANUAL
             val sessionId = UUID.randomUUID().toString()
             val userId = generateRandomString(4)
             
-            // Format JSON persis seperti temuan hacker kita
-            // Kita pakai string manual biar tidak kena error 'Unresolved reference toJson'
+            // JSON MANUAL
             val jsonString = "{\"website\":\"new31.ngefilm.site\",\"playing\":true,\"sessionId\":\"$sessionId\",\"userId\":\"$userId\",\"playerId\":\"$playerId\",\"videoId\":\"$videoId\",\"country\":\"ID\",\"platform\":\"Mobile\",\"browser\":\"ChromiumBase\",\"os\":\"Android\"}"
 
-            // Enkripsi Token buatan kita
             val tokenHex = encryptAES(jsonString)
 
-            // STEP 3: Kirim Token ke /api/v1/player
-            // Wajib bawa Cookies dari STEP 1
             val playerUrl = "$RPM_BASE_API/player?t=$tokenHex"
             val encryptedResponse = app.get(playerUrl, headers = commonHeaders, cookies = sessionCookies).text.replace(Regex("[^0-9a-fA-F]"), "")
 
-            // STEP 4: Dekripsi respons akhir untuk dapat link video
             val decryptedFinal = decryptHexAES(encryptedResponse)
             
             if (decryptedFinal.isNotEmpty()) {
-                // Cari URL .m3u8 pakai Regex (Menangkap parameter ?v=... juga)
                 val linkRegex = Regex("""(https?:\/\/[^"']+\.m3u8[^"']*)""")
                 val linkMatch = linkRegex.find(decryptedFinal)
                 
                 if (linkMatch != null) {
-                    // Bersihkan URL dari escape slash (\/)
                     val streamUrl = linkMatch.groupValues[1].replace("\\/", "/") 
                     
                     callback.invoke(
@@ -226,15 +222,21 @@ class Ngefilm21 : MainAPI() {
                             this.quality = getQualityFromName("HD")
                         }
                     )
+                } else {
+                    // [DEBUG]
+                    // showToast("Gagal Parse Link dari Final Decrypt")
                 }
+            } else {
+                // [DEBUG]
+                // showToast("Gagal Decrypt Final")
             }
 
         } catch (e: Exception) {
             e.printStackTrace()
+            // showToast("Error: ${e.message}")
         }
     }
 
-    // Helper: Enkripsi String -> Hex (Untuk membungkus Token)
     private fun encryptAES(plainText: String): String {
         try {
             val keySpec = SecretKeySpec(AES_KEY.toByteArray(Charsets.UTF_8), "AES")
@@ -249,7 +251,6 @@ class Ngefilm21 : MainAPI() {
         }
     }
 
-    // Helper: Dekripsi Hex -> String (Untuk membuka Info & Link)
     private fun decryptHexAES(hexString: String): String {
         try {
             if (hexString.isEmpty()) return ""
@@ -265,7 +266,6 @@ class Ngefilm21 : MainAPI() {
         }
     }
 
-    // Helper Konversi
     private fun hexStringToByteArray(s: String): ByteArray {
         val len = s.length
         if (len % 2 != 0) return ByteArray(0) 
@@ -284,4 +284,12 @@ class Ngefilm21 : MainAPI() {
             .map { allowedChars.random() }
             .joinToString("")
     }
+    
+    // Helper Debug (Uncomment jika ingin mengaktifkan)
+    // private suspend fun showToast(msg: String) {
+    //     com.lagradost.cloudstream3.utils.Coroutines.main {
+    //         // Logika toast manual atau log
+    //         println("DEBUG_NGEFILM: $msg")
+    //     }
+    // }
 }
