@@ -119,52 +119,73 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val rawHtml = app.get(data).text
 
-        // --- STRATEGI: MANIPULASI HEADER SEPERTI PYTHON ---
-        // Cari link Kraken
+        // --- HANYA SERVER 4 (KRAKENFILES) ---
+        // Cari URL Embed: https://krakenfiles.com/embed-video/ID
         val krakenRegex = Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""")
         
         krakenRegex.findAll(rawHtml).forEach { match ->
             val embedUrl = match.groupValues[1]
-            // JANGAN PAKAI loadExtractor()!!
-            // Kita bedah sendiri pakai headers lengkap
+            // Langsung bongkar manual, jangan pakai extractor bawaan
             extractKrakenManual(embedUrl, callback)
         }
 
         return true
     }
 
-    // --- FUNGSI BEDAH MANUAL (METODE LAMA) ---
     private suspend fun extractKrakenManual(url: String, callback: (ExtractorLink) -> Unit) {
         try {
-            // Header ini KUNCI SUKSES-nya (sama persis dengan script Python)
+            // Header WAJIB (Sesuai script Python yang sukses)
             val headers = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-                "Referer" to "https://new31.ngefilm.site/", // Pura-pura dari web aslinya
-                "Origin" to "https://new31.ngefilm.site"
+                "Referer" to "https://new31.ngefilm.site/",
+                "Origin" to "https://new31.ngefilm.site",
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
             )
 
-            // Request halaman embed dengan headers sakti
-            val doc = app.get(url, headers = headers).document
+            // Request halaman embed dan ambil TEXT mentahnya (bukan document parsed)
+            val responseText = app.get(url, headers = headers).text
 
-            // Cari tag <source src="..."> seperti yang ditemukan script Python
-            val videoUrl = doc.selectFirst("source")?.attr("src")
+            // --- JURUS REGEX ---
+            // Mencari <source src="..."> tanpa Jsoup, karena lebih reliable untuk Kraken
+            // Pola: src="https://...krakencloud... ... "
+            val videoRegex = Regex("""src=["'](https:[^"']+\.mp4[^"']*)["']""")
+            val match = videoRegex.find(responseText)
 
-            if (!videoUrl.isNullOrEmpty()) {
-                val fixedUrl = if (videoUrl.startsWith("//")) "https:$videoUrl" else videoUrl
-                
-                // Kirim link final ke player
+            if (match != null) {
+                var videoUrl = match.groupValues[1]
+                // Fix URL jika ada backslash (format JSON string kadang ada)
+                videoUrl = videoUrl.replace("\\", "")
+
                 callback.invoke(
                     newExtractorLink(
                         source = "Krakenfiles",
                         name = "Krakenfiles (Server 4)",
-                        url = fixedUrl,
+                        url = videoUrl,
                         type = ExtractorLinkType.VIDEO
                     ) {
-                        // Referer video biasanya dari halaman embed itu sendiri
                         this.referer = url
                         this.quality = Qualities.Unknown.value
                     }
                 )
+            } else {
+                // Cadangan: Coba cari pola data-src-url
+                val dataSrcRegex = Regex("""data-src-url=["'](https:[^"']+)["']""")
+                val dataMatch = dataSrcRegex.find(responseText)
+                
+                if (dataMatch != null) {
+                    var videoUrl = dataMatch.groupValues[1].replace("\\", "")
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "Krakenfiles",
+                            name = "Krakenfiles (Backup)",
+                            url = videoUrl,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = url
+                            this.quality = Qualities.Unknown.value
+                        }
+                    )
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()
