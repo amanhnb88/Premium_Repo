@@ -7,6 +7,9 @@ import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import java.util.UUID
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 class Ngefilm21 : MainAPI() {
     override var mainUrl = "https://new31.ngefilm.site"
@@ -84,7 +87,7 @@ class Ngefilm21 : MainAPI() {
                 val epName = element.attr("title").removePrefix("Permalink ke ")
                 if (epUrl.isNotEmpty()) newEpisode(epUrl) { this.name = epName; this.episode = epNum } else null
             }
-            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+            return newTvSeriesLoadResponse(title, url, type, episodes) {
                 this.posterUrl = poster; this.plot = plot; this.year = year
                 this.score = Score.from10(ratingText?.toDoubleOrNull()); this.tags = tags; this.actors = actors
             }
@@ -108,44 +111,45 @@ class Ngefilm21 : MainAPI() {
         val playerLinks = document.select(".muvipro-player-tabs a").mapNotNull { it.attr("href") }.toMutableList()
         if (playerLinks.isEmpty()) playerLinks.add(data)
 
-        // 2. Loop setiap Tab (Server 1, 2, 3, 4...)
-        playerLinks.distinct().apmap { playerUrl ->
-            try {
-                val fixedUrl = if (playerUrl.startsWith("http")) playerUrl else "$mainUrl$playerUrl"
-                val pageContent = app.get(fixedUrl).text // Fetch halaman player
-
-                // [SERVER 2] ABYSS (SHORT.ICU) - FIX REDIRECT
-                // Temuan Log: short.icu -> abysscdn.com
-                Regex("""src=["'](https://short\.icu/[^"']+)["']""").findAll(pageContent).forEach { match ->
-                    val shortUrl = match.groupValues[1]
+        // 2. Loop setiap Tab (Server 1, 2, 3, 4...) menggunakan ASYNC (Pengganti apmap)
+        coroutineScope {
+            playerLinks.distinct().map { playerUrl ->
+                async {
                     try {
-                        // Ikuti redirect sampai mentok
-                        val finalUrl = app.get(shortUrl, headers = mapOf("Referer" to fixedUrl)).url
-                        // Jika hasilnya abysscdn, serahkan ke Extractor bawaan
-                        if (finalUrl.contains("abysscdn") || finalUrl.contains("abyss")) {
-                            loadExtractor(finalUrl, subtitleCallback, callback)
+                        val fixedUrl = if (playerUrl.startsWith("http")) playerUrl else "$mainUrl$playerUrl"
+                        val pageContent = app.get(fixedUrl).text // Fetch halaman player
+
+                        // [SERVER 2] ABYSS (SHORT.ICU) - FIX REDIRECT
+                        Regex("""src=["'](https://short\.icu/[^"']+)["']""").findAll(pageContent).forEach { match ->
+                            val shortUrl = match.groupValues[1]
+                            try {
+                                val finalUrl = app.get(shortUrl, headers = mapOf("Referer" to fixedUrl)).url
+                                if (finalUrl.contains("abysscdn") || finalUrl.contains("abyss")) {
+                                    loadExtractor(finalUrl, subtitleCallback, callback)
+                                }
+                            } catch (e: Exception) {}
                         }
+
+                        // [SERVER 4] KRAKENFILES - MANUAL FIX
+                        Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""").findAll(pageContent).forEach { match ->
+                            extractKrakenManual(match.groupValues[1], callback)
+                        }
+
+                        // [SERVER 5] MIXDROP / XSHOTCOK
+                        Regex("""src=["'](https://(?:xshotcok\.com|mixdrop\.[a-z]+)/embed-[^"']+)["']""").findAll(pageContent).forEach { match ->
+                            loadExtractor(match.groupValues[1], subtitleCallback, callback)
+                        }
+
+                        // [SERVER 1] RPM LIVE - AES FIX
+                        val rpmMatch = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""").find(pageContent)
+                        if (rpmMatch != null) {
+                            val id = rpmMatch.groupValues[1].ifEmpty { rpmMatch.groupValues[2] }
+                            extractRpm(id, callback)
+                        }
+
                     } catch (e: Exception) {}
                 }
-
-                // [SERVER 4] KRAKENFILES - MANUAL FIX
-                Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""").findAll(pageContent).forEach { match ->
-                    extractKrakenManual(match.groupValues[1], callback)
-                }
-
-                // [SERVER 5] MIXDROP / XSHOTCOK
-                Regex("""src=["'](https://(?:xshotcok\.com|mixdrop\.[a-z]+)/embed-[^"']+)["']""").findAll(pageContent).forEach { match ->
-                    loadExtractor(match.groupValues[1], subtitleCallback, callback)
-                }
-
-                // [SERVER 1] RPM LIVE - AES FIX (Best Effort)
-                val rpmMatch = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""").find(pageContent)
-                if (rpmMatch != null) {
-                    val id = rpmMatch.groupValues[1].ifEmpty { rpmMatch.groupValues[2] }
-                    extractRpm(id, callback)
-                }
-
-            } catch (e: Exception) {}
+            }.awaitAll()
         }
         return true
     }
@@ -179,7 +183,6 @@ class Ngefilm21 : MainAPI() {
             val json = "{\"website\":\"new31.ngefilm.site\",\"playing\":true,\"sessionId\":\"${UUID.randomUUID()}\",\"userId\":\"guest\",\"playerId\":\"$pid\",\"videoId\":\"$id\",\"country\":\"ID\",\"platform\":\"Mobile\",\"browser\":\"ChromiumBase\",\"os\":\"Android\"}"
             val token = encryptAES(json)
             
-            // Tambahkan header X-Requested-With agar server tidak menolak (Fix dari temuan log Python)
             val hPlayer = h + mapOf("X-Requested-With" to "XMLHttpRequest")
             val res = decryptAES(app.get("https://playerngefilm21.rpmlive.online/api/v1/player?t=$token", headers = hPlayer).text)
             
