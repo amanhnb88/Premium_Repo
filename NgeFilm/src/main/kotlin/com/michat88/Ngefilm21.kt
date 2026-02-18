@@ -146,14 +146,14 @@ class Ngefilm21 : MainAPI() {
                         val rpmMatch = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""").find(pageContent)
                         rpmMatch?.let { extractRpm(it.groupValues[1].ifEmpty { it.groupValues[2] }, callback) }
 
-                        // [SERVER 3] VIBUXER / HGLINK / MASUKESTIN (FIXED REGEX CASE-INSENSITIVE)
-                        // (?i) = Ignore Case (Cocok untuk src=, SRC=, Href=, dll)
+                        // [SERVER 3] VIBUXER / HGLINK / MASUKESTIN
+                        // Regex dilonggarkan spasi-nya (\s*) dan case insensitive (?i)
                         val vibuxerRegex = Regex("""(?i)(?:src|href)\s*=\s*["'](https://(?:hglink\.(?:to|com|net)|vibuxer\.(?:com|net|to)|masukestin\.(?:com|net))/e/[a-zA-Z0-9]+)["']""")
                         vibuxerRegex.findAll(pageContent).forEach { 
                             val rawUrl = it.groupValues[1]
                             System.out.println("NGEFILM FOUND MASUKESTIN: $rawUrl")
                             
-                            // Paksa ganti ke domain masukestin.com agar API call valid
+                            // Paksa replace domain ke masukestin
                             val targetUrl = rawUrl.replace("hglink.to", "masukestin.com")
                                                   .replace("hglink.net", "masukestin.com")
                                                   .replace("vibuxer.com", "masukestin.com")
@@ -183,7 +183,7 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
-    // --- MASUKESTIN / HGLINK LOGIC ---
+    // --- MASUKESTIN / HGLINK LOGIC (FIXED) ---
     private suspend fun extractMasukestin(url: String, callback: (ExtractorLink) -> Unit) {
         try {
             val domain = "masukestin.com" 
@@ -210,11 +210,12 @@ class Ngefilm21 : MainAPI() {
                 val unpackedJs = Unpacker.unpack(packedCode)
                 System.out.println("NGEFILM UNPACKED SUCCESS")
 
-                // [METODE 1] Cari Link langsung di hasil unpack (Paling Cepat & Akurat)
-                // Menangkap link relatif (/stream/...) atau absolute (https://...)
-                var linkM3u8 = Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""").find(unpackedJs)?.groupValues?.get(1)
+                // [METODE 1 - SAPU JAGAT] 
+                // Cari string apa saja yang diapit kutip dan berakhiran .m3u8 (atau ada query string setelahnya)
+                // Ini akan menangkap: "file":"/stream/..." atau "src":"https://..." atau "/stream/..."
+                var linkM3u8 = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(unpackedJs)?.groupValues?.get(1)
 
-                // [METODE 2] Backup pakai API jika metode 1 gagal
+                // [METODE 2 - API] Backup
                 if (linkM3u8 == null) {
                     val hashMatch = Regex("""hash\s*:\s*["']([^"']+)["']""").find(unpackedJs)
                     val hash = hashMatch?.groupValues?.get(1)
@@ -234,7 +235,7 @@ class Ngefilm21 : MainAPI() {
                 if (linkM3u8 != null) {
                     linkM3u8 = linkM3u8!!.replace("\\/", "/")
                     
-                    // Handle URL Relatif (Penting untuk Masukestin!)
+                    // Handle URL Relatif
                     if (linkM3u8!!.startsWith("/")) {
                         linkM3u8 = "https://$domain$linkM3u8"
                     }
@@ -255,10 +256,12 @@ class Ngefilm21 : MainAPI() {
                             )
                         }
                     )
+                } else {
+                    System.out.println("NGEFILM FAILED TO FIND M3U8 IN UNPACKED JS")
                 }
             } else {
                 // Fallback direct regex di HTML
-                var directM3u8 = Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""").find(doc)?.groupValues?.get(1)
+                var directM3u8 = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(doc)?.groupValues?.get(1)
                 if (directM3u8 != null) {
                      directM3u8 = directM3u8!!.replace("\\/", "/")
                      if (directM3u8!!.startsWith("/")) directM3u8 = "https://$domain$directM3u8"
