@@ -25,29 +25,61 @@ class Ngefilm21 : MainAPI() {
 
     // --- PERBAIKAN POSTER HD ---
     private fun Element.getImageAttr(): String? {
-        // Coba ambil url dari data-src (lazy load) atau src biasa
         var url = this.attr("data-src").ifEmpty { this.attr("src") }
-        
-        // Jika masih kosong, coba intip srcset
         if (url.isEmpty()) {
             val srcset = this.attr("srcset")
             if (srcset.isNotEmpty()) {
-                // Ambil url pertama dari srcset sebagai fallback
                 url = srcset.split(",").firstOrNull()?.trim()?.split(" ")?.firstOrNull() ?: ""
             }
         }
-
         return if (url.isNotEmpty()) {
-            // Hapus dimensi gambar (contoh: -60x90, -152x228) menggunakan Regex
-            // Ini akan mengubah "...gambar-60x90.jpg" menjadi "...gambar.jpg" (Original HD)
+            // Hapus dimensi gambar untuk dapat HD (cth: -60x90)
             httpsify(url).replace(Regex("-\\d+x\\d+"), "")
         } else null
     }
 
+    // --- DAFTAR KATEGORI ---
+    // Format: "Nama Kategori" to "URL Bagian Belakang"
+    private val categories = listOf(
+        Pair("Upload Terbaru", ""), // Kosong berarti halaman utama
+        Pair("Indonesia Movie", "/country/indonesia"),
+        Pair("Indonesia Series", "/?s=&search=advanced&post_type=tv&index=&orderby=&genre=&movieyear=&country=indonesia&quality="),
+        Pair("Drakor", "/?s=&search=advanced&post_type=tv&index=&orderby=&genre=drama&movieyear=&country=korea&quality="),
+        Pair("VivaMax", "/country/philippines"),
+        Pair("Movies", "/country/canada"),
+        Pair("Ahok Movie", "/country/china")
+    )
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val document = app.get("$mainUrl/page/$page/").document
-        val home = document.select("article.item-infinite").mapNotNull { it.toSearchResult() }
-        return newHomePageResponse(HomePageList("Upload Terbaru", home), hasNext = true)
+        // Menggunakan apmap untuk load semua kategori secara paralel (cepat)
+        val homeItems = categories.apmap { (title, urlPath) ->
+            // Logika Pembentukan URL Halaman (Pagination)
+            val finalUrl = if (urlPath.isEmpty()) {
+                // Upload Terbaru: https://site.com/page/1/
+                "$mainUrl/page/$page/"
+            } else if (urlPath.contains("?")) {
+                // Tipe Search: https://site.com/page/1/?s=...
+                val split = urlPath.split("?")
+                "$mainUrl/page/$page/?${split[1]}"
+            } else {
+                // Tipe Negara/Kategori: https://site.com/country/indonesia/page/1/
+                "$mainUrl$urlPath/page/$page/"
+            }
+
+            try {
+                val document = app.get(finalUrl).document
+                val items = document.select("article.item-infinite").mapNotNull { it.toSearchResult() }
+                
+                // Jika items ditemukan, buat list horizontal
+                if (items.isNotEmpty()) {
+                    HomePageList(title, items)
+                } else null
+            } catch (e: Exception) {
+                null
+            }
+        }.filterNotNull()
+
+        return newHomePageResponse(homeItems, hasNext = true)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
