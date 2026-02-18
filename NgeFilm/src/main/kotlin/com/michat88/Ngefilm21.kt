@@ -21,6 +21,7 @@ class Ngefilm21 : MainAPI() {
 
     // --- KONFIGURASI API & ENKRIPSI ---
     private val RPM_BASE_API = "https://playerngefilm21.rpmlive.online/api/v1"
+    // Kunci & IV Abadi (Hasil Sniper)
     private val AES_KEY = "kiemtienmua911ca"
     private val AES_IV = "1234567890oiuytr"
 
@@ -128,16 +129,20 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val rawHtml = app.get(data).text
 
+        // 1. Deteksi ID RPM Live (Target Utama)
+        // Pola: rpmlive.online/...#ID atau ?id=ID
         val rpmRegex = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""")
         val rpmMatch = rpmRegex.find(rawHtml)
         
         if (rpmMatch != null) {
             val id = rpmMatch.groupValues[1].ifEmpty { rpmMatch.groupValues[2] }
             if (id.isNotEmpty()) {
+                // JALANKAN LOGIKA GENERATOR TOKEN
                 extractRpmGenerator(id, callback)
             }
         }
 
+        // 2. Link Download & Server Lain (Fallback)
         val document = org.jsoup.Jsoup.parse(rawHtml)
         document.select(".gmr-download-list a").forEach { link ->
             loadExtractor(link.attr("href"), subtitleCallback, callback)
@@ -153,6 +158,7 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
+    // --- LOGIKA UTAMA: Info -> Buat Token -> Player -> Video ---
     private suspend fun extractRpmGenerator(
         videoId: String, 
         callback: (ExtractorLink) -> Unit
@@ -165,45 +171,49 @@ class Ngefilm21 : MainAPI() {
                 "Accept" to "*/*"
             )
 
-            // LANGKAH 1: Ambil Info Terenkripsi
+            // STEP 1: Ambil Info Terenkripsi dari /api/v1/info
             val infoUrl = "$RPM_BASE_API/info?id=$videoId"
             val infoResponse = app.get(infoUrl, headers = commonHeaders)
             
-            // Simpan Cookies secara manual untuk dipakai di request berikutnya
-            val cookiesMap = infoResponse.cookies
+            // Simpan Cookies (PENTING!)
+            val sessionCookies = infoResponse.cookies
             
+            // Bersihkan dan dekripsi respons info
             val rawInfoHex = infoResponse.text.replace(Regex("[^0-9a-fA-F]"), "")
             val decryptedInfo = decryptHexAES(rawInfoHex)
             
-            // Ambil playerId menggunakan Regex (Lebih aman daripada parse JSON)
+            // Ambil 'playerId' menggunakan REGEX (Bukan parse JSON biasa, biar anti-error)
+            // Pola: "playerId" : "XXXX"
             val playerIdMatch = Regex(""""playerId"\s*:\s*"([^"]+)"""").find(decryptedInfo)
             val playerId = playerIdMatch?.groupValues?.get(1) ?: return 
 
-            // LANGKAH 2: BUAT TOKEN JSON MANUAL
+            // STEP 2: RACIK TOKEN JSON SECARA MANUAL
             val sessionId = UUID.randomUUID().toString()
             val userId = generateRandomString(4)
             
+            // Format JSON persis seperti temuan hacker kita
+            // Kita pakai string manual biar tidak kena error 'Unresolved reference toJson'
             val jsonString = "{\"website\":\"new31.ngefilm.site\",\"playing\":true,\"sessionId\":\"$sessionId\",\"userId\":\"$userId\",\"playerId\":\"$playerId\",\"videoId\":\"$videoId\",\"country\":\"ID\",\"platform\":\"Mobile\",\"browser\":\"ChromiumBase\",\"os\":\"Android\"}"
 
-            // Enkripsi JSON manual tadi
+            // Enkripsi Token buatan kita
             val tokenHex = encryptAES(jsonString)
 
-            // LANGKAH 3: Kirim Token Buatan Kita ke /player
-            // Gunakan cookies yang tadi kita simpan
+            // STEP 3: Kirim Token ke /api/v1/player
+            // Wajib bawa Cookies dari STEP 1
             val playerUrl = "$RPM_BASE_API/player?t=$tokenHex"
-            val encryptedResponse = app.get(playerUrl, headers = commonHeaders, cookies = cookiesMap).text.replace(Regex("[^0-9a-fA-F]"), "")
+            val encryptedResponse = app.get(playerUrl, headers = commonHeaders, cookies = sessionCookies).text.replace(Regex("[^0-9a-fA-F]"), "")
 
-            // LANGKAH 4: Dekripsi respons akhir
+            // STEP 4: Dekripsi respons akhir untuk dapat link video
             val decryptedFinal = decryptHexAES(encryptedResponse)
             
             if (decryptedFinal.isNotEmpty()) {
-                // Cari URL m3u8 menggunakan Regex (Menangkap parameter ?v=... juga)
-                // Pola: "https://... .m3u8 ... "
+                // Cari URL .m3u8 pakai Regex (Menangkap parameter ?v=... juga)
                 val linkRegex = Regex("""(https?:\/\/[^"']+\.m3u8[^"']*)""")
                 val linkMatch = linkRegex.find(decryptedFinal)
                 
                 if (linkMatch != null) {
-                    val streamUrl = linkMatch.groupValues[1].replace("\\/", "/") // Fix slash ter-escape
+                    // Bersihkan URL dari escape slash (\/)
+                    val streamUrl = linkMatch.groupValues[1].replace("\\/", "/") 
                     
                     callback.invoke(
                         newExtractorLink(
@@ -224,7 +234,7 @@ class Ngefilm21 : MainAPI() {
         }
     }
 
-    // Helper: Enkripsi String -> Hex
+    // Helper: Enkripsi String -> Hex (Untuk membungkus Token)
     private fun encryptAES(plainText: String): String {
         try {
             val keySpec = SecretKeySpec(AES_KEY.toByteArray(Charsets.UTF_8), "AES")
@@ -239,7 +249,7 @@ class Ngefilm21 : MainAPI() {
         }
     }
 
-    // Helper: Dekripsi Hex -> String
+    // Helper: Dekripsi Hex -> String (Untuk membuka Info & Link)
     private fun decryptHexAES(hexString: String): String {
         try {
             if (hexString.isEmpty()) return ""
@@ -255,6 +265,7 @@ class Ngefilm21 : MainAPI() {
         }
     }
 
+    // Helper Konversi
     private fun hexStringToByteArray(s: String): ByteArray {
         val len = s.length
         if (len % 2 != 0) return ByteArray(0) 
