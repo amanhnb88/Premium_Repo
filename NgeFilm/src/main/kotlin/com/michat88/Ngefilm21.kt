@@ -133,7 +133,8 @@ class Ngefilm21 : MainAPI() {
             extractAbyssCdn(match.groupValues[1], callback)
         }
 
-        // --- 2. SERVER 4: Krakenfiles ---
+        // --- 2. SERVER 4: Krakenfiles (PRIORITAS UTAMA) ---
+        // Menangkap link embed dan menyerahkan ke Extractor bawaan CloudStream
         Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""").findAll(rawHtml).forEach { match ->
             loadExtractor(match.groupValues[1], subtitleCallback, callback)
         }
@@ -196,7 +197,7 @@ class Ngefilm21 : MainAPI() {
                         url = match.groupValues[1],
                         type = ExtractorLinkType.VIDEO
                     ) {
-                        this.quality = Qualities.Unknown.value // Perbaikan disini: quality masuk ke dalam block
+                        this.quality = Qualities.Unknown.value
                     }
                 )
             }
@@ -218,7 +219,7 @@ class Ngefilm21 : MainAPI() {
                         url = streamUrl,
                         type = ExtractorLinkType.M3U8
                     ) {
-                        this.quality = Qualities.Unknown.value // Perbaikan disini: quality masuk ke dalam block
+                        this.quality = Qualities.Unknown.value
                         this.referer = "https://vibuxer.com/"
                         this.headers = mapOf("Origin" to "https://vibuxer.com")
                     }
