@@ -18,8 +18,8 @@ class Ngefilm21 : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
 
-    // --- KONFIGURASI HASIL SNIPER & PYTHON TEST ---
-    private val UA_BROWSER = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+    // --- CONFIG SAKTI (DARI HASIL HACKING KITA) ---
+    private val UA_BROWSER = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
     private val RPM_KEY = "6b69656d7469656e6d75613931316361" 
     private val RPM_IV  = "313233343536373839306f6975797472"
 
@@ -32,7 +32,6 @@ class Ngefilm21 : MainAPI() {
             }
         }
         return if (url.isNotEmpty()) {
-            // Hapus dimensi gambar untuk dapat HD (cth: -60x90)
             httpsify(url).replace(Regex("-\\d+x\\d+"), "")
         } else null
     }
@@ -81,8 +80,6 @@ class Ngefilm21 : MainAPI() {
     private fun Element.toSearchResult(): SearchResponse? {
         val title = this.selectFirst(".entry-title a")?.text() ?: return null
         val href = this.selectFirst(".entry-title a")?.attr("href") ?: ""
-        
-        // FIX QUALITY BADGE: Ambil teks langsung dari div pembungkusnya
         val qualityText = this.selectFirst(".gmr-quality-item")?.text()?.trim() ?: "HD"
         
         return newMovieSearchResponse(title, href, TvType.Movie) {
@@ -101,14 +98,13 @@ class Ngefilm21 : MainAPI() {
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: ""
         val poster = document.selectFirst(".gmr-movie-data figure img")?.getImageAttr()
         
-        // FIX SINOPSIS & INFO EXTRA
+        // FIX SINOPSIS
         val plotText = document.selectFirst("div.entry-content[itemprop='description'] p")?.text()?.trim() 
             ?: document.selectFirst("div.entry-content p")?.text()?.trim()
+            ?: document.selectFirst("meta[property='og:description']")?.attr("content")
+
         val yearText = document.selectFirst(".gmr-moviedata a[href*='year']")?.text()?.toIntOrNull()
-        
-        // FIX RATING: Ambil stringnya saja (jangan di-convert ke Int dulu)
         val ratingText = document.selectFirst("[itemprop='ratingValue']")?.text()?.trim()
-        
         val tagsList = document.select(".gmr-moviedata a[href*='genre']").map { it.text() }
         val actorsList = document.select("[itemprop='actors'] a").map { it.text() }
         val trailerUrl = document.selectFirst("a.gmr-trailer-popup")?.attr("href")
@@ -128,32 +124,20 @@ class Ngefilm21 : MainAPI() {
                 this.posterUrl = poster
                 this.plot = plotText
                 this.year = yearText
-                // FIX: Pakai Score.from10 untuk rating string
                 this.score = Score.from10(ratingText)
                 this.tags = tagsList
-                // FIX: Map string actor ke ActorData object
                 this.actors = actorsList.map { ActorData(Actor(it)) }
-                
-                // FIX: Tambahkan trailer manual ke list
-                if (!trailerUrl.isNullOrEmpty()) {
-                    this.trailers.add(TrailerData(trailerUrl, null, false))
-                }
+                if (!trailerUrl.isNullOrEmpty()) this.trailers.add(TrailerData(trailerUrl, null, false))
             }
         } else {
             return newMovieLoadResponse(title, url, type, url) { 
                 this.posterUrl = poster
                 this.plot = plotText
                 this.year = yearText
-                // FIX: Pakai Score.from10
                 this.score = Score.from10(ratingText)
                 this.tags = tagsList
-                // FIX: Map string actor ke ActorData object
                 this.actors = actorsList.map { ActorData(Actor(it)) }
-                
-                // FIX: Tambahkan trailer manual ke list
-                if (!trailerUrl.isNullOrEmpty()) {
-                    this.trailers.add(TrailerData(trailerUrl, null, false))
-                }
+                if (!trailerUrl.isNullOrEmpty()) this.trailers.add(TrailerData(trailerUrl, null, false))
             }
         }
     }
@@ -175,7 +159,7 @@ class Ngefilm21 : MainAPI() {
                         val fixedUrl = if (playerUrl.startsWith("http")) playerUrl else "$mainUrl$playerUrl"
                         val pageContent = app.get(fixedUrl, headers = mapOf("User-Agent" to UA_BROWSER)).text 
 
-                        // [SERVER 1] RPM LIVE
+                        // [SERVER 1] RPM LIVE - NEW LOGIC (/API/V1/VIDEO)
                         val rpmMatch = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""").find(pageContent)
                         rpmMatch?.let { extractRpm(it.groupValues[1].ifEmpty { it.groupValues[2] }, callback) }
 
@@ -184,14 +168,14 @@ class Ngefilm21 : MainAPI() {
                             extractKrakenManual(it.groupValues[1], callback) 
                         }
 
-                        // [SERVER 2] ABYSS
+                        // [SERVER 2] ABYSS / SHORT.ICU
                         Regex("""src=["'](https://short\.icu/[^"']+)["']""").findAll(pageContent).forEach { 
                             val finalUrl = app.get(it.groupValues[1], headers = mapOf("Referer" to fixedUrl)).url
                             if (finalUrl.contains("abyss")) loadExtractor(finalUrl, subtitleCallback, callback)
                         }
 
-                        // [SERVER 5] MIXDROP
-                        Regex("""src=["'](https://(?:xshotcok\.com|mixdrop\.[a-z]+)/embed-[^"']+)["']""").findAll(pageContent).forEach { 
+                        // [SERVER 5] MIXDROP (GENERIC REGEX)
+                        Regex("""src=["'](https://[^"']*(?:mixdrop|xshotcok)[^"']*/embed-[^"']+)["']""").findAll(pageContent).forEach { 
                             loadExtractor(it.groupValues[1], subtitleCallback, callback)
                         }
                     } catch (e: Exception) {}
@@ -203,27 +187,41 @@ class Ngefilm21 : MainAPI() {
 
     private suspend fun extractRpm(id: String, callback: (ExtractorLink) -> Unit) {
         try {
-            // UPDATED HEADER: Sesuai hasil tes Python yang SUKSES
+            // Header Resmi dari Python Debugger
             val h = mapOf(
+                "Host" to "playerngefilm21.rpmlive.online",
+                "User-Agent" to UA_BROWSER,
                 "Referer" to "https://playerngefilm21.rpmlive.online/",
                 "Origin" to "https://playerngefilm21.rpmlive.online",
                 "X-Requested-With" to "XMLHttpRequest",
-                "User-Agent" to UA_BROWSER,
                 "Accept" to "*/*"
             )
+
+            // Tembak langsung API VIDEO (Bukan Info/Player)
+            val domain = mainUrl.removePrefix("https://").removePrefix("http://").removeSuffix("/")
+            val videoApi = "https://playerngefilm21.rpmlive.online/api/v1/video?id=$id&w=1920&h=1080&r=$domain"
             
-            val infoDec = decryptAES(app.get("https://playerngefilm21.rpmlive.online/api/v1/info?id=$id", headers = h).text)
-            val pid = Regex(""""playerId"\s*:\s*"([^"]+)"""").find(infoDec)?.groupValues?.get(1) ?: return
+            val encryptedRes = app.get(videoApi, headers = h).text
             
-            val jsonPayload = "{\"website\":\"new31.ngefilm.site\",\"playing\":true,\"sessionId\":\"${UUID.randomUUID()}\",\"userId\":\"guest\",\"playerId\":\"$pid\",\"videoId\":\"$id\",\"country\":\"ID\",\"platform\":\"Mobile\",\"browser\":\"ChromiumBase\",\"os\":\"Android\"}"
-            val token = encryptAES(jsonPayload)
-            val playerDec = decryptAES(app.get("https://playerngefilm21.rpmlive.online/api/v1/player?t=$token", headers = h).text)
+            // Decrypt Response
+            // Cek jika sudah JSON plain (kadang terjadi), kalau hex baru decrypt
+            val jsonStr = if (encryptedRes.trim().startsWith("{")) encryptedRes else decryptAES(encryptedRes)
             
-            Regex("""(https?://[^"']+\.m3u8[^"']*)""").find(playerDec)?.groupValues?.get(1)?.let { m3u8 ->
-                callback.invoke(newExtractorLink("RPM Live", "RPM Live", m3u8.replace("\\/", "/"), ExtractorLinkType.M3U8) {
+            // Ambil Link "source"
+            Regex(""""source"\s*:\s*"([^"]+)"""").find(jsonStr)?.groupValues?.get(1)?.let { link ->
+                callback.invoke(newExtractorLink("RPM Live", "RPM Live", link.replace("\\/", "/"), ExtractorLinkType.M3U8) {
                     this.referer = "https://playerngefilm21.rpmlive.online/"
                 })
             }
+
+            // Ambil Backup "hlsVideoTiktok" (Jika ada)
+            Regex(""""hlsVideoTiktok"\s*:\s*"([^"]+)"""").find(jsonStr)?.groupValues?.get(1)?.let { link ->
+                val fullLink = "https://playerngefilm21.rpmlive.online" + link.replace("\\/", "/")
+                callback.invoke(newExtractorLink("RPM Live (Backup)", "RPM Live (Backup)", fullLink, ExtractorLinkType.M3U8) {
+                    this.referer = "https://playerngefilm21.rpmlive.online/"
+                })
+            }
+
         } catch (e: Exception) {}
     }
 
