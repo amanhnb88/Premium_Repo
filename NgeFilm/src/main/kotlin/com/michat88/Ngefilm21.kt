@@ -33,7 +33,6 @@ class Ngefilm21 : MainAPI() {
             }
         }
         return if (url.isNotEmpty()) {
-            // Hapus dimensi gambar untuk dapat HD (cth: -60x90)
             httpsify(url).replace(Regex("-\\d+x\\d+"), "")
         } else null
     }
@@ -83,15 +82,12 @@ class Ngefilm21 : MainAPI() {
         val title = this.selectFirst(".entry-title a")?.text() ?: return null
         val href = this.selectFirst(".entry-title a")?.attr("href") ?: ""
         
-        // --- FIX LOGO QUALITY ---
-        // Kita ambil text langsung dari class "gmr-quality-item"
-        // .trim() untuk menghapus spasi, .ifEmpty untuk jaga-jaga kalau kosong diisi "HD"
+        // FIX QUALITY BADGE: Ambil teks langsung dari div pembungkusnya, bukan maksa cari <a>
         val qualityText = this.selectFirst(".gmr-quality-item")?.text()?.trim() ?: "HD"
         
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = this@toSearchResult.selectFirst(".content-thumbnail img")?.getImageAttr()
-            // Masukkan kualitas ke poster
-            addQuality(qualityText.ifEmpty { "HD" })
+            addQuality(qualityText)
         }
     }
 
@@ -104,6 +100,16 @@ class Ngefilm21 : MainAPI() {
         val document = app.get(url).document
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: ""
         val poster = document.selectFirst(".gmr-movie-data figure img")?.getImageAttr()
+        
+        // FIX SINOPSIS & INFO EXTRA
+        val plotText = document.selectFirst("div.entry-content[itemprop='description'] p")?.text()?.trim() 
+            ?: document.selectFirst("div.entry-content p")?.text()?.trim()
+        val yearText = document.selectFirst(".gmr-moviedata a[href*='year']")?.text()?.toIntOrNull()
+        val ratingText = document.selectFirst("[itemprop='ratingValue']")?.text()?.toRatingInt()
+        val tagsList = document.select(".gmr-moviedata a[href*='genre']").map { it.text() }
+        val actorsList = document.select("[itemprop='actors'] a").map { it.text() }
+        val trailerUrl = document.selectFirst("a.gmr-trailer-popup")?.attr("href")
+
         val epElements = document.select(".gmr-listseries a").filter { it.attr("href").contains("/eps/") }
         val isSeries = epElements.isNotEmpty()
         val type = if (isSeries) TvType.TvSeries else TvType.Movie
@@ -115,9 +121,25 @@ class Ngefilm21 : MainAPI() {
                     this.episode = Regex("(\\d+)").find(it.text())?.groupValues?.get(1)?.toIntOrNull()
                 }
             }
-            return newTvSeriesLoadResponse(title, url, type, episodes) { this.posterUrl = poster }
+            return newTvSeriesLoadResponse(title, url, type, episodes) { 
+                this.posterUrl = poster
+                this.plot = plotText
+                this.year = yearText
+                this.rating = ratingText
+                this.tags = tagsList
+                this.actors = actorsList
+                if (!trailerUrl.isNullOrEmpty()) addTrailer(trailerUrl)
+            }
         } else {
-            return newMovieLoadResponse(title, url, type, url) { this.posterUrl = poster }
+            return newMovieLoadResponse(title, url, type, url) { 
+                this.posterUrl = poster
+                this.plot = plotText
+                this.year = yearText
+                this.rating = ratingText
+                this.tags = tagsList
+                this.actors = actorsList
+                if (!trailerUrl.isNullOrEmpty()) addTrailer(trailerUrl)
+            }
         }
     }
 
@@ -138,7 +160,7 @@ class Ngefilm21 : MainAPI() {
                         val fixedUrl = if (playerUrl.startsWith("http")) playerUrl else "$mainUrl$playerUrl"
                         val pageContent = app.get(fixedUrl, headers = mapOf("User-Agent" to UA_BROWSER)).text 
 
-                        // [SERVER 1] RPM LIVE - DEKRIPSI AES
+                        // [SERVER 1] RPM LIVE
                         val rpmMatch = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""").find(pageContent)
                         rpmMatch?.let { extractRpm(it.groupValues[1].ifEmpty { it.groupValues[2] }, callback) }
 
