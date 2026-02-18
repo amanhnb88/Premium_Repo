@@ -4,30 +4,27 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
-// --- PROVIDER UTAMA ---
 class Ngefilm21 : MainAPI() {
     override var mainUrl = "https://new31.ngefilm.site"
     override var name = "Ngefilm21"
     override val hasMainPage = true
     override var lang = "id"
-    override val supportedTypes = setOf(
-        TvType.Movie,
-        TvType.TvSeries,
-        TvType.AsianDrama
-    )
+    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
 
-    // Helper untuk poster resolusi tinggi
+    // --- FIX 1: POSTER ANTI-404 ---
     private fun Element.getImageAttr(): String? {
+        // Coba ambil dari srcset (daftar ukuran gambar resmi)
         val srcset = this.attr("srcset")
         if (srcset.isNotEmpty()) {
             return try {
                 srcset.split(",")
                     .map { it.trim().split(" ") }
                     .filter { it.size >= 2 }
-                    .maxByOrNull { it[1].replace("w", "").toIntOrNull() ?: 0 }
+                    .maxByOrNull { it[1].replace("w", "").toIntOrNull() ?: 0 } // Pilih yang paling besar
                     ?.get(0)
             } catch (e: Exception) { this.attr("src") }
         }
+        // Fallback: ambil src biasa, JANGAN dihapus resolusinya biar gak 404
         return this.attr("data-src").ifEmpty { this.attr("src") }
     }
 
@@ -61,7 +58,10 @@ class Ngefilm21 : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: ""
+        
+        // Gunakan fix poster di sini
         val poster = document.selectFirst(".gmr-movie-data figure img")?.getImageAttr()
+        
         val plot = document.selectFirst("div.entry-content[itemprop='description'] p")?.text()?.trim()
         val year = document.selectFirst(".gmr-moviedata:contains(Tahun) a")?.text()?.trim()?.toIntOrNull()
         val ratingText = document.selectFirst("span[itemprop='ratingValue']")?.text()?.trim()
@@ -83,130 +83,124 @@ class Ngefilm21 : MainAPI() {
         val isSeries = episodeElements.isNotEmpty()
         val type = if (isSeries) TvType.TvSeries else TvType.Movie
 
-        val response = if (isSeries) {
+        if (isSeries) {
             val episodes = episodeElements.mapNotNull { element ->
                 val epUrl = element.attr("href")
-                val epText = element.text()
-                val epNum = Regex("(\\d+)").find(epText)?.groupValues?.get(1)?.toIntOrNull()
+                val epNum = Regex("(\\d+)").find(element.text())?.groupValues?.get(1)?.toIntOrNull()
                 val epName = element.attr("title").removePrefix("Permalink ke ")
-                if (epUrl.isNotEmpty()) {
-                    newEpisode(epUrl) {
-                        this.name = epName
-                        this.episode = epNum
-                    }
-                } else null
+                if (epUrl.isNotEmpty()) newEpisode(epUrl) { this.name = epName; this.episode = epNum } else null
             }
-            newTvSeriesLoadResponse(title, url, type, episodes) {
-                this.posterUrl = poster
-                this.plot = plot
-                this.year = year
-                this.score = Score.from10(ratingText?.toDoubleOrNull())
-                this.tags = tags
-                this.actors = actors
+            return newTvSeriesLoadResponse(title, url, type, episodes) {
+                this.posterUrl = poster; this.plot = plot; this.year = year
+                this.score = Score.from10(ratingText?.toDoubleOrNull()); this.tags = tags; this.actors = actors
             }
         } else {
-            newMovieLoadResponse(title, url, type, url) {
-                this.posterUrl = poster
-                this.plot = plot
-                this.year = year
-                this.score = Score.from10(ratingText?.toDoubleOrNull())
-                this.tags = tags
-                this.actors = actors
+            return newMovieLoadResponse(title, url, type, url) {
+                this.posterUrl = poster; this.plot = plot; this.year = year
+                this.score = Score.from10(ratingText?.toDoubleOrNull()); this.tags = tags; this.actors = actors
+                if (trailerUrl != null) this.trailers.add(TrailerData(trailerUrl, null, false))
             }
         }
-
-        if (trailerUrl != null) {
-             response.trailers.add(TrailerData(trailerUrl, null, false))
-        }
-
-        return response
     }
 
+    // --- LOGIKA UTAMA LOAD LINKS (MULTI-FETCH) ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val rawHtml = app.get(data).text
-
-        // --- PANGGIL CUSTOM EXTRACTOR (NgefilmKraken) ---
-        // Cari URL Embed Kraken: https://krakenfiles.com/embed-video/ID
-        val krakenRegex = Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""")
+        val document = app.get(data).document
         
-        krakenRegex.findAll(rawHtml).forEach { match ->
-            val embedUrl = match.groupValues[1]
-            // Panggil class extractor khusus kita di bawah
-            NgefilmKraken().getUrl(embedUrl, null, subtitleCallback, callback)
-        }
+        // 1. Ambil semua link player dari Tab (Server 1, 2, 3, 4, dst)
+        val playerLinks = document.select(".muvipro-player-tabs a").mapNotNull { 
+            it.attr("href") 
+        }.toMutableList()
 
-        // --- Fallback untuk Iframe Umum ---
-        val document = org.jsoup.Jsoup.parse(rawHtml)
-        document.select("iframe").forEach { iframe ->
-            val src = iframe.attr("src")
-            val fixedSrc = if (src.startsWith("//")) "https:$src" else src
-            
-            // Hindari double process untuk Kraken (karena sudah dihandle NgefilmKraken)
-            if (!fixedSrc.contains("krakenfiles.com") && !fixedSrc.contains("youtube.com")) { 
-                loadExtractor(fixedSrc, subtitleCallback, callback)
+        // Tambahkan halaman saat ini (takutnya tabnya gak lengkap)
+        if (playerLinks.isEmpty()) playerLinks.add(data)
+        // Pastikan link unik
+        val uniqueLinks = playerLinks.distinct()
+
+        // 2. Loop setiap link player, fetch halamannya, lalu cari videonya
+        uniqueLinks.apmap { playerUrl ->
+            try {
+                // Fix URL relative
+                val fixedUrl = if (playerUrl.startsWith("http")) playerUrl else "$mainUrl$playerUrl"
+                val pageContent = app.get(fixedUrl).text
+                
+                // --- PROSES KRAKENFILES (SERVER 4) ---
+                val krakenRegex = Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""")
+                krakenRegex.findAll(pageContent).forEach { match ->
+                    extractKrakenManual(match.groupValues[1], callback)
+                }
+
+                // --- PROSES MIXDROP (SERVER 5) ---
+                val mixdropRegex = Regex("""src=["'](https://(?:xshotcok\.com|mixdrop\.[a-z]+)/embed-[^"']+)["']""")
+                mixdropRegex.findAll(pageContent).forEach { match ->
+                    loadExtractor(match.groupValues[1], subtitleCallback, callback)
+                }
+
+                // --- PROSES ABYSS / SHORT.ICU (SERVER 2) ---
+                val abyssRegex = Regex("""src=["'](https://short\.icu/[^"']+)["']""")
+                abyssRegex.findAll(pageContent).forEach { match ->
+                    extractAbyssManual(match.groupValues[1], callback)
+                }
+                
+                // --- PROSES VIBUXER (SERVER 3) ---
+                val vibuxerRegex = Regex("""src=["'](https://(?:hgcloud\.to|vibuxer\.com)/e/[^"']+)["']""")
+                vibuxerRegex.findAll(pageContent).forEach { match ->
+                    loadExtractor(match.groupValues[1], subtitleCallback, callback)
+                }
+
+            } catch (e: Exception) {
+                // Ignore error per page fetch
             }
         }
 
         return true
     }
-}
 
-// --- CUSTOM EXTRACTOR KHUSUS KRAKEN ---
-// Ini meniru struktur Krakenfiles.kt tetapi dengan Headers & Regex yang sudah kita perbaiki
-open class NgefilmKraken : ExtractorApi() {
-    override val name = "Krakenfiles (Custom)"
-    override val mainUrl = "https://krakenfiles.com"
-    override val requiresReferer = false
-
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        // Headers ini WAJIB agar tidak diblokir (Sama seperti Script Python)
-        val customHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-            "Referer" to "https://new31.ngefilm.site/",
-            "Origin" to "https://new31.ngefilm.site",
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-        )
-
-        // Request ke halaman embed dengan headers yang benar
-        val response = app.get(url, headers = customHeaders).text
-
-        // Regex V2: Mencari pola link video yang valid (bukan .mp4 text biasa)
-        // Sesuai temuan: src="https://phs9.krakencloud.net/play/video/..."
-        val videoRegex = Regex("""src=["'](https:[^"']+/play/video/[^"']+)["']""")
-        val match = videoRegex.find(response)
-        
-        // Backup Regex jika pola pertama gagal (kadang di data-src-url)
-        val finalUrl = if (match != null) {
-            match.groupValues[1]
-        } else {
-            Regex("""data-src-url=["'](https:[^"']+)["']""").find(response)?.groupValues?.get(1)
-        }
-
-        if (finalUrl != null) {
-            // Bersihkan URL dari backslash (jika ada)
-            val cleanUrl = finalUrl.replace("\\", "")
-            
-            callback.invoke(
-                newExtractorLink(
-                    this.name,
-                    this.name,
-                    [span_2](start_span)httpsify(cleanUrl), //[span_2](end_span)
-                    [span_3](start_span)ExtractorLinkType.VIDEO //[span_3](end_span)
-                ) {
-                    [span_4](start_span)this.referer = url //[span_4](end_span)
-                    [span_5](start_span)this.quality = Qualities.Unknown.value //[span_5](end_span) - Memperbaiki error parameter 'quality'
-                }
+    // --- MANUAL KRAKEN (Header Trick) ---
+    private suspend fun extractKrakenManual(url: String, callback: (ExtractorLink) -> Unit) {
+        try {
+            val headers = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                "Referer" to "https://new31.ngefilm.site/"
             )
-        }
+            val text = app.get(url, headers = headers).text
+            
+            // Cari source video
+            val videoUrl = Regex("""<source[^>]+src=["'](https:[^"']+)["']""").find(text)?.groupValues?.get(1)
+                ?: Regex("""src=["'](https:[^"']+/play/video/[^"']+)["']""").find(text)?.groupValues?.get(1)
+
+            if (videoUrl != null) {
+                callback.invoke(newExtractorLink(
+                    source = "Krakenfiles",
+                    name = "Krakenfiles",
+                    url = videoUrl.replace("&amp;", "&"),
+                    type = ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = url
+                    this.quality = Qualities.Unknown.value
+                })
+            }
+        } catch (e: Exception) {}
+    }
+
+    // --- MANUAL ABYSS (Follow Redirect) ---
+    private suspend fun extractAbyssManual(url: String, callback: (ExtractorLink) -> Unit) {
+        try {
+            val videoId = url.substringAfterLast("/")
+            val abyssUrl = "https://abysscdn.com/?v=$videoId"
+            val text = app.get(abyssUrl, headers = mapOf("Referer" to mainUrl)).text
+            
+            Regex("""file:\s*["'](https://[^"']+\.mp4[^"']*)["']""").find(text)?.groupValues?.get(1)?.let { mp4 ->
+                callback.invoke(newExtractorLink("Abyss", "Abyss", mp4, ExtractorLinkType.VIDEO) {
+                    this.referer = "https://abysscdn.com/"
+                    this.quality = Qualities.Unknown.value
+                })
+            }
+        } catch (e: Exception) {}
     }
 }
