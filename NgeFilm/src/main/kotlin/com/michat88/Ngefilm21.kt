@@ -19,7 +19,7 @@ class Ngefilm21 : MainAPI() {
         TvType.AsianDrama
     )
 
-    // --- KONFIGURASI API & ENKRIPSI ---
+    // --- KONFIGURASI ENKRIPSI RPM (Cadangan) ---
     private val RPM_BASE_API = "https://playerngefilm21.rpmlive.online/api/v1"
     private val AES_KEY = "kiemtienmua911ca"
     private val AES_IV = "1234567890oiuytr"
@@ -126,31 +126,39 @@ class Ngefilm21 : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // [DEBUG]
-        // showToast("Memuat: $data")
-        
         val rawHtml = app.get(data).text
-        
-        // [DEBUG] Cek apakah HTML kosong
-        // if (rawHtml.length < 100) showToast("HTML Kosong/Error!")
 
-        // 1. Ekstrak ID dari RPM Live
-        val rpmRegex = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""")
-        val rpmMatch = rpmRegex.find(rawHtml)
-        
-        if (rpmMatch != null) {
-            val id = rpmMatch.groupValues[1].ifEmpty { rpmMatch.groupValues[2] }
-            if (id.isNotEmpty()) {
-                // [DEBUG]
-                // showToast("ID Ketemu: $id")
-                extractRpmGenerator(id, callback)
-            }
-        } else {
-            // [DEBUG] Jika ID tidak ketemu, coba cari iframe manual untuk memastikan
-            // val iframeCount = rawHtml.count { it == 'i' } // Dummy logic
-            // showToast("ID RPM tidak ditemukan di halaman ini.")
+        // --- PRIORITAS 1: SERVER 4 (KRAKENFILES) ---
+        // Paling stabil & didukung native
+        Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""").findAll(rawHtml).forEach { match ->
+            loadExtractor(match.groupValues[1], subtitleCallback, callback)
         }
 
+        // --- PRIORITAS 2: SERVER 2 (ABYSS/SHORT.ICU) ---
+        // Bongkar manual untuk dapat MP4
+        Regex("""src=["'](https://short\.icu/[^"']+)["']""").findAll(rawHtml).forEach { match ->
+            extractAbyssCdn(match.groupValues[1], callback)
+        }
+
+        // --- PRIORITAS 3: SERVER 5 (MIXDROP/XSHOTCOK) ---
+        Regex("""src=["'](https://(?:xshotcok\.com|mixdrop\.[a-z]+)/embed-[^"']+)["']""").findAll(rawHtml).forEach { match ->
+            loadExtractor(match.groupValues[1], subtitleCallback, callback)
+        }
+
+        // --- PRIORITAS 4: SERVER 3 (VIBUXER) ---
+        Regex("""src=["'](https://(?:hgcloud\.to|vibuxer\.com)/e/[^"']+)["']""").findAll(rawHtml).forEach { match ->
+            extractVibuxer(match.groupValues[1], callback)
+        }
+
+        // --- CADANGAN: SERVER 1 (RPM LIVE) ---
+        val rpmRegex = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""")
+        val rpmMatch = rpmRegex.find(rawHtml)
+        if (rpmMatch != null) {
+            val id = rpmMatch.groupValues[1].ifEmpty { rpmMatch.groupValues[2] }
+            if (id.isNotEmpty()) extractRpmGenerator(id, callback)
+        }
+
+        // --- FALLBACK: IFRAME LAIN ---
         val document = org.jsoup.Jsoup.parse(rawHtml)
         document.select(".gmr-download-list a").forEach { link ->
             loadExtractor(link.attr("href"), subtitleCallback, callback)
@@ -158,7 +166,16 @@ class Ngefilm21 : MainAPI() {
         document.select("iframe").forEach { iframe ->
             val src = iframe.attr("src")
             val fixedSrc = if (src.startsWith("//")) "https:$src" else src
-            if (!fixedSrc.contains("youtube.com") && !fixedSrc.contains("rpmlive.online")) { 
+            
+            // Hindari double processing
+            if (!fixedSrc.contains("youtube.com") && 
+                !fixedSrc.contains("rpmlive.online") && 
+                !fixedSrc.contains("short.icu") &&
+                !fixedSrc.contains("krakenfiles.com") &&
+                !fixedSrc.contains("hgcloud.to") &&
+                !fixedSrc.contains("vibuxer.com") &&
+                !fixedSrc.contains("xshotcok.com") &&
+                !fixedSrc.contains("mixdrop")) { 
                 loadExtractor(fixedSrc, subtitleCallback, callback)
             }
         }
@@ -166,10 +183,52 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
-    private suspend fun extractRpmGenerator(
-        videoId: String, 
-        callback: (ExtractorLink) -> Unit
-    ) {
+    // --- LOGIKA MANUAL: SERVER 2 (Abyss) ---
+    private suspend fun extractAbyssCdn(shortUrl: String, callback: (ExtractorLink) -> Unit) {
+        try {
+            val id = shortUrl.substringAfterLast("/")
+            val abyssUrl = "https://abysscdn.com/?v=$id"
+            val headers = mapOf("Referer" to "https://new31.ngefilm.site/", "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36")
+            val response = app.get(abyssUrl, headers = headers).text
+            
+            Regex("""file:\s*["'](https://[^"']+\.(?:mp4|m3u8)[^"']*)["']""").findAll(response).forEach { match ->
+                callback.invoke(
+                    newExtractorLink(
+                        source = "AbyssCDN",
+                        name = "Server 2 (Abyss)",
+                        url = match.groupValues[1],
+                        type = ExtractorLinkType.VIDEO,
+                        quality = Qualities.Unknown.value
+                    )
+                )
+            }
+        } catch (e: Exception) { e.printStackTrace() }
+    }
+
+    // --- LOGIKA MANUAL: SERVER 3 (Vibuxer) ---
+    private suspend fun extractVibuxer(embedUrl: String, callback: (ExtractorLink) -> Unit) {
+        try {
+            val headers = mapOf("Referer" to "https://new31.ngefilm.site/", "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36")
+            val response = app.get(embedUrl, headers = headers).text
+            Regex("""file:\s*["'](https?://[^"']+(?:\.m3u8|\.txt)[^"']*)["']""").findAll(response).forEach { match ->
+                callback.invoke(
+                    newExtractorLink(
+                        source = "Vibuxer",
+                        name = "Server 3 (Vibuxer)",
+                        url = match.groupValues[1],
+                        type = ExtractorLinkType.M3U8,
+                        quality = Qualities.Unknown.value
+                    ) {
+                        this.referer = "https://vibuxer.com/"
+                        this.headers = mapOf("Origin" to "https://vibuxer.com")
+                    }
+                )
+            }
+        } catch (e: Exception) { e.printStackTrace() }
+    }
+
+    // --- LOGIKA MANUAL: SERVER 1 (RPM) ---
+    private suspend fun extractRpmGenerator(videoId: String, callback: (ExtractorLink) -> Unit) {
         try {
             val commonHeaders = mapOf(
                 "Referer" to "https://playerngefilm21.rpmlive.online/",
@@ -183,58 +242,37 @@ class Ngefilm21 : MainAPI() {
             val sessionCookies = infoResponse.cookies
             
             val rawInfoHex = infoResponse.text.replace(Regex("[^0-9a-fA-F]"), "")
-            
-            // [DEBUG]
-            // if (rawInfoHex.isEmpty()) showToast("Gagal ambil Hex Info")
-
             val decryptedInfo = decryptHexAES(rawInfoHex)
             val playerIdMatch = Regex(""""playerId"\s*:\s*"([^"]+)"""").find(decryptedInfo)
             val playerId = playerIdMatch?.groupValues?.get(1) ?: return 
 
             val sessionId = UUID.randomUUID().toString()
             val userId = generateRandomString(4)
-            
-            // JSON MANUAL
             val jsonString = "{\"website\":\"new31.ngefilm.site\",\"playing\":true,\"sessionId\":\"$sessionId\",\"userId\":\"$userId\",\"playerId\":\"$playerId\",\"videoId\":\"$videoId\",\"country\":\"ID\",\"platform\":\"Mobile\",\"browser\":\"ChromiumBase\",\"os\":\"Android\"}"
-
             val tokenHex = encryptAES(jsonString)
 
             val playerUrl = "$RPM_BASE_API/player?t=$tokenHex"
             val encryptedResponse = app.get(playerUrl, headers = commonHeaders, cookies = sessionCookies).text.replace(Regex("[^0-9a-fA-F]"), "")
-
             val decryptedFinal = decryptHexAES(encryptedResponse)
             
             if (decryptedFinal.isNotEmpty()) {
                 val linkRegex = Regex("""(https?:\/\/[^"']+\.m3u8[^"']*)""")
                 val linkMatch = linkRegex.find(decryptedFinal)
-                
                 if (linkMatch != null) {
-                    val streamUrl = linkMatch.groupValues[1].replace("\\/", "/") 
-                    
                     callback.invoke(
                         newExtractorLink(
                             source = "RPM Live",
-                            name = "RPM Live (Auto)",
-                            url = streamUrl,
+                            name = "Server 1 (RPM)",
+                            url = linkMatch.groupValues[1].replace("\\/", "/"),
                             type = ExtractorLinkType.M3U8
                         ) {
                             this.referer = "https://playerngefilm21.rpmlive.online/"
                             this.quality = getQualityFromName("HD")
                         }
                     )
-                } else {
-                    // [DEBUG]
-                    // showToast("Gagal Parse Link dari Final Decrypt")
                 }
-            } else {
-                // [DEBUG]
-                // showToast("Gagal Decrypt Final")
             }
-
-        } catch (e: Exception) {
-            e.printStackTrace()
-            // showToast("Error: ${e.message}")
-        }
+        } catch (e: Exception) { e.printStackTrace() }
     }
 
     private fun encryptAES(plainText: String): String {
@@ -244,11 +282,8 @@ class Ngefilm21 : MainAPI() {
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             cipher.init(Cipher.ENCRYPT_MODE, keySpec, ivSpec)
             val encryptedBytes = cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))
-            
             return encryptedBytes.joinToString("") { "%02x".format(it) }
-        } catch (e: Exception) {
-            return ""
-        }
+        } catch (e: Exception) { return "" }
     }
 
     private fun decryptHexAES(hexString: String): String {
@@ -261,9 +296,7 @@ class Ngefilm21 : MainAPI() {
             cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
             val decryptedBytes = cipher.doFinal(encryptedBytes)
             return String(decryptedBytes, Charsets.UTF_8)
-        } catch (e: Exception) {
-            return ""
-        }
+        } catch (e: Exception) { return "" }
     }
 
     private fun hexStringToByteArray(s: String): ByteArray {
@@ -284,12 +317,4 @@ class Ngefilm21 : MainAPI() {
             .map { allowedChars.random() }
             .joinToString("")
     }
-    
-    // Helper Debug (Uncomment jika ingin mengaktifkan)
-    // private suspend fun showToast(msg: String) {
-    //     com.lagradost.cloudstream3.utils.Coroutines.main {
-    //         // Logika toast manual atau log
-    //         println("DEBUG_NGEFILM: $msg")
-    //     }
-    // }
 }
