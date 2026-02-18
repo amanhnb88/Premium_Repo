@@ -21,7 +21,7 @@ class Ngefilm21 : MainAPI() {
     // --- CONFIG ---
     private val UA_BROWSER = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
     private val RPM_KEY = "6b69656d7469656e6d75613931316361" 
-    private val RPM_IV  = "313233343536373839306f6975797472"
+    private val RPM_IV = "313233343536373839306f6975797472"
 
     private fun Element.getImageAttr(): String? {
         var url = this.attr("data-src").ifEmpty { this.attr("src") }
@@ -146,11 +146,12 @@ class Ngefilm21 : MainAPI() {
                         val rpmMatch = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""").find(pageContent)
                         rpmMatch?.let { extractRpm(it.groupValues[1].ifEmpty { it.groupValues[2] }, callback) }
 
-                        // [SERVER 3] VIBUXER / HGLINK (FIXED LOGIC)
-                        // Mencari pola hglink atau vibuxer dengan regex yang lebih longgar
-                        val vibuxerRegex = Regex("""(?:src|href)=["'](https://(?:hglink\.to|vibuxer\.com)/e/[a-zA-Z0-9]+)["']""")
+                        // [SERVER 3] VIBUXER / HGLINK (FIXED)
+                        // Mencari pola hglink atau vibuxer dengan regex yang lebih aman dan mendukung variasi domain
+                        val vibuxerRegex = Regex("""(?:src|href)=["'](https://(?:hglink\.(?:to|com|net)|vibuxer\.(?:com|net|to))/e/[a-zA-Z0-9]+)["']""")
                         vibuxerRegex.findAll(pageContent).forEach { 
                             val directUrl = it.groupValues[1].replace("hglink.to", "vibuxer.com")
+                                .replace("hglink.net", "vibuxer.com")
                             extractVibuxer(directUrl, callback) 
                         }
 
@@ -176,58 +177,50 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
-    // --- VIBUXER / HGLINK LOGIC (REFACTORED) ---
+    // --- VIBUXER / HGLINK LOGIC (FIXED) ---
     private suspend fun extractVibuxer(url: String, callback: (ExtractorLink) -> Unit) {
         try {
-            System.out.println("VIBUXER: Starting extraction for $url") // Debug Log
-            
+            // 1. Ambil Halaman Embed & Simpan Cookies
             val response = app.get(url, headers = mapOf(
                 "User-Agent" to UA_BROWSER,
-                "Referer" to "https://hglink.to/",
+                "Referer" to "https://new31.ngefilm.site/",
                 "Origin" to "https://hglink.to"
             ))
+            
             val doc = response.text
-            val cookies = response.cookies
+            val cookies = response.cookies // PENTING: Simpan cookies sesi
 
-            // Ambil Video ID dari URL (Backup jika file_code tidak ketemu di JS)
-            val urlVideoId = url.split("/e/").lastOrNull() ?: ""
+            // 2. Ambil Video ID dari URL (Lebih reliable daripada parsing JS)
+            val videoId = url.substringAfter("/e/").substringBefore("?").substringBefore("\"").substringBefore("'")
 
-            // Cari Packer: eval(function(p,a,c,k,e,d)
+            // 3. Cari dan Unpack JavaScript
             val packedRegex = Regex("""eval\(function\(p,a,c,k,e,d.*?\.split\('\|'\)\)""")
             val packedCode = packedRegex.find(doc)?.value
 
             if (packedCode != null) {
-                // Gunakan Unpacker yang lebih robust
                 val unpackedJs = Unpacker.unpack(packedCode)
-                
-                // Cari HASH (Pola: hash:'xxxx' atau hash:"xxxx")
-                // Menggunakan [\"'] agar support kutip satu atau dua
-                val hashMatch = Regex("""hash\s*:\s*[\"']([^\"']+)[\"']""").find(unpackedJs)
+
+                // 4. Cari HASH di dalam kode yang sudah di-unpack
+                val hashMatch = Regex("""hash\s*:\s*["']([^"']+)["']""").find(unpackedJs)
                 val hash = hashMatch?.groupValues?.get(1)
 
-                // Cari Video ID (file_code) di dalam JS (Kadang beda dengan URL)
-                val fileCodeMatch = Regex("""file_code\s*:\s*[\"']([^\"']+)[\"']""").find(unpackedJs)
-                val videoId = fileCodeMatch?.groupValues?.get(1) ?: urlVideoId
-
                 if (hash != null) {
-                    System.out.println("VIBUXER: Hash found: $hash, ID: $videoId") // Debug Log
-                    
+                    // 5. Request ke API Vibuxer (dengan Cookies)
                     val apiUrl = "https://vibuxer.com/dl?op=view&file_code=$videoId&hash=$hash&embed=1&referer=hglink.to"
+                    
                     val apiRes = app.get(apiUrl, headers = mapOf(
                         "User-Agent" to UA_BROWSER,
-                        "Referer" to url,
+                        "Referer" to url, // Referer embed page
                         "X-Requested-With" to "XMLHttpRequest"
-                    ), cookies = cookies).text
+                    ), cookies = cookies).text 
 
-                    // Parsing Manual JSON (Lebih aman dari parseJson class jika struktur berubah)
-                    // Cari pola "url":"https://..." atau link m3u8 langsung
-                    var linkM3u8 = Regex("""[\"'](https:[^\"']+\.m3u8[^\"']*)[\"']""").find(apiRes)?.groupValues?.get(1)
-                    
-                    // Decode slash yang ter-escape (https:\/\/ -> https://)
+                    // 6. Ambil Link M3U8
+                    var linkM3u8 = Regex("""["']url["']\s*:\s*["'](https:[^"']+\.m3u8[^"']*)["']""").find(apiRes)?.groupValues?.get(1)
+                        ?: Regex("""["'](https:[^"']+\.m3u8[^"']*)["']""").find(apiRes)?.groupValues?.get(1)
+
                     linkM3u8 = linkM3u8?.replace("\\/", "/")
 
                     if (linkM3u8 != null) {
-                        System.out.println("VIBUXER: Success! Link: $linkM3u8") // Debug Log
                         callback.invoke(
                             newExtractorLink(
                                 "Vibuxer",
@@ -235,54 +228,41 @@ class Ngefilm21 : MainAPI() {
                                 linkM3u8,
                                 ExtractorLinkType.M3U8
                             ) {
-                                this.referer = "https://vibuxer.com/"
+                                this.headers = mapOf(
+                                    "User-Agent" to UA_BROWSER,
+                                    "Referer" to "https://vibuxer.com/"
+                                )
                             }
                         )
-                    } else {
-                        System.out.println("VIBUXER: Failed to find m3u8 in API response: $apiRes")
                     }
-                } else {
-                    System.out.println("VIBUXER: Hash not found in unpacked JS")
                 }
-            } else {
-                System.out.println("VIBUXER: No packed code found")
             }
         } catch (e: Exception) {
-            System.out.println("VIBUXER Error: ${e.message}")
             e.printStackTrace()
         }
     }
 
     // --- ROBUST UNPACKER ---
-    // Logika decoding Dean Edwards yang lebih toleran
     object Unpacker {
         fun unpack(packedJS: String): String {
             try {
-                // Mengambil bagian payload, radix, count, dan dictionary tanpa Regex yang terlalu ketat
-                // Kita cari posisi }(' di akhir function packer
                 val startIdx = packedJS.indexOf("}('") 
                 if (startIdx == -1) return packedJS
                 
-                val argsString = packedJS.substring(startIdx + 3) // Skip }('
-                // Pisahkan berdasarkan .split('|') yang ada di akhir
+                val argsString = packedJS.substring(startIdx + 3)
                 val splitIdx = argsString.lastIndexOf("'.split('|')")
                 if (splitIdx == -1) return packedJS
 
                 val coreData = argsString.substring(0, splitIdx)
-                // Format coreData: payload, radix, count, dictionaryString
-                // Kita pisah dari belakang karena payload bisa mengandung koma
-                
                 val parts = coreData.split(",")
-                if (parts.size < 4) return packedJS // Safety check
+                if (parts.size < 4) return packedJS 
 
-                // Ambil dictionary (elemen terakhir yang dikurung kutip)
                 val dictRaw = parts.last().trim('\'', '"')
                 val dictionary = dictRaw.split("|")
                 
                 val count = parts[parts.size - 2].toInt()
                 val radix = parts[parts.size - 3].toInt()
                 
-                // Payload adalah sisanya di depan
                 val payloadRaw = coreData.substring(0, coreData.lastIndexOf("," + radix))
                 val payload = payloadRaw.trim('\'', '"')
 
@@ -303,7 +283,6 @@ class Ngefilm21 : MainAPI() {
                 for (i in count - 1 downTo 0) {
                     val token = encodeBase(i, radix)
                     val word = if (i < dictionary.size && dictionary[i].isNotEmpty()) dictionary[i] else token
-                    // Replace dengan boundary check manual
                     decoded = decoded.replace(Regex("""\b$token\b"""), word)
                 }
                 return decoded.replace("\\", "")
