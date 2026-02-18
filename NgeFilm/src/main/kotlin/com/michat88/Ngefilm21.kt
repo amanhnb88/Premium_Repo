@@ -18,7 +18,7 @@ class Ngefilm21 : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
 
-    // --- KONFIGURASI HASIL SNIPER ---
+    // --- KONFIGURASI HASIL SNIPER & PYTHON TEST ---
     private val UA_BROWSER = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
     private val RPM_KEY = "6b69656d7469656e6d75613931316361" 
     private val RPM_IV  = "313233343536373839306f6975797472"
@@ -106,7 +106,7 @@ class Ngefilm21 : MainAPI() {
             ?: document.selectFirst("div.entry-content p")?.text()?.trim()
         val yearText = document.selectFirst(".gmr-moviedata a[href*='year']")?.text()?.toIntOrNull()
         
-        // FIX RATING (Jangan pakai .toRatingInt())
+        // FIX RATING: Ambil stringnya saja (jangan di-convert ke Int dulu)
         val ratingText = document.selectFirst("[itemprop='ratingValue']")?.text()?.trim()
         
         val tagsList = document.select(".gmr-moviedata a[href*='genre']").map { it.text() }
@@ -128,12 +128,13 @@ class Ngefilm21 : MainAPI() {
                 this.posterUrl = poster
                 this.plot = plotText
                 this.year = yearText
-                // FIX RATING: Pakai Score.from10
+                // FIX: Pakai Score.from10 untuk rating string
                 this.score = Score.from10(ratingText)
                 this.tags = tagsList
-                // FIX ACTORS: Map string ke ActorData
+                // FIX: Map string actor ke ActorData object
                 this.actors = actorsList.map { ActorData(Actor(it)) }
-                // FIX TRAILER: Add manual ke list
+                
+                // FIX: Tambahkan trailer manual ke list
                 if (!trailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(trailerUrl, null, false))
                 }
@@ -143,12 +144,13 @@ class Ngefilm21 : MainAPI() {
                 this.posterUrl = poster
                 this.plot = plotText
                 this.year = yearText
-                // FIX RATING: Pakai Score.from10
+                // FIX: Pakai Score.from10
                 this.score = Score.from10(ratingText)
                 this.tags = tagsList
-                // FIX ACTORS: Map string ke ActorData
+                // FIX: Map string actor ke ActorData object
                 this.actors = actorsList.map { ActorData(Actor(it)) }
-                // FIX TRAILER: Add manual ke list
+                
+                // FIX: Tambahkan trailer manual ke list
                 if (!trailerUrl.isNullOrEmpty()) {
                     this.trailers.add(TrailerData(trailerUrl, null, false))
                 }
@@ -201,7 +203,15 @@ class Ngefilm21 : MainAPI() {
 
     private suspend fun extractRpm(id: String, callback: (ExtractorLink) -> Unit) {
         try {
-            val h = mapOf("Referer" to "https://playerngefilm21.rpmlive.online/", "X-Requested-With" to "XMLHttpRequest", "User-Agent" to UA_BROWSER)
+            // UPDATED HEADER: Sesuai hasil tes Python yang SUKSES
+            val h = mapOf(
+                "Referer" to "https://playerngefilm21.rpmlive.online/",
+                "Origin" to "https://playerngefilm21.rpmlive.online",
+                "X-Requested-With" to "XMLHttpRequest",
+                "User-Agent" to UA_BROWSER,
+                "Accept" to "*/*"
+            )
+            
             val infoDec = decryptAES(app.get("https://playerngefilm21.rpmlive.online/api/v1/info?id=$id", headers = h).text)
             val pid = Regex(""""playerId"\s*:\s*"([^"]+)"""").find(infoDec)?.groupValues?.get(1) ?: return
             
