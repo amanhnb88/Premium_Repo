@@ -60,13 +60,11 @@ class Ngefilm21 : MainAPI() {
             if (name.isNotBlank()) ActorData(Actor(name, null)) else null
         }
 
-        // Ambil Trailer
         var trailerUrl = document.selectFirst("a.gmr-trailer-popup")?.attr("href")
         if (trailerUrl == null) {
             trailerUrl = document.selectFirst("iframe[src*='youtube.com']")?.attr("src")
         }
 
-        // Cek apakah Series atau Movie
         val episodeElements = document.select(".gmr-listseries a").filter {
             it.attr("href").contains("/eps/") && !it.text().contains("Pilih", true)
         }
@@ -119,32 +117,57 @@ class Ngefilm21 : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Ambil HTML halaman video
         val rawHtml = app.get(data).text
 
-        // --- KHUSUS SERVER 4 (KRAKENFILES) ---
-        // Cari pola: krakenfiles.com/embed-video/ID
+        // --- STRATEGI: MANIPULASI HEADER SEPERTI PYTHON ---
+        // Cari link Kraken
         val krakenRegex = Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""")
         
-        // Loop pencarian (siapa tahu ada lebih dari satu)
         krakenRegex.findAll(rawHtml).forEach { match ->
             val embedUrl = match.groupValues[1]
-            // Serahkan link ini ke sistem CloudStream.
-            // CloudStream akan otomatis mengenali ini Krakenfiles dan mengekstrak videonya.
-            loadExtractor(embedUrl, subtitleCallback, callback)
-        }
-
-        // --- FALLBACK (CADANGAN JIKA KRAKEN MATI) ---
-        // Cari iframe umum lainnya tapi hindari yang sudah jelas bukan video
-        val document = org.jsoup.Jsoup.parse(rawHtml)
-        document.select("iframe").forEach { iframe ->
-            val src = iframe.attr("src")
-            // Hanya proses jika belum ditangani regex di atas dan bukan iklan
-            if (src.contains("krakenfiles.com/view/")) { // Handle pola /view/ juga
-                 loadExtractor(src, subtitleCallback, callback)
-            }
+            // JANGAN PAKAI loadExtractor()!!
+            // Kita bedah sendiri pakai headers lengkap
+            extractKrakenManual(embedUrl, callback)
         }
 
         return true
+    }
+
+    // --- FUNGSI BEDAH MANUAL (METODE LAMA) ---
+    private suspend fun extractKrakenManual(url: String, callback: (ExtractorLink) -> Unit) {
+        try {
+            // Header ini KUNCI SUKSES-nya (sama persis dengan script Python)
+            val headers = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                "Referer" to "https://new31.ngefilm.site/", // Pura-pura dari web aslinya
+                "Origin" to "https://new31.ngefilm.site"
+            )
+
+            // Request halaman embed dengan headers sakti
+            val doc = app.get(url, headers = headers).document
+
+            // Cari tag <source src="..."> seperti yang ditemukan script Python
+            val videoUrl = doc.selectFirst("source")?.attr("src")
+
+            if (!videoUrl.isNullOrEmpty()) {
+                val fixedUrl = if (videoUrl.startsWith("//")) "https:$videoUrl" else videoUrl
+                
+                // Kirim link final ke player
+                callback.invoke(
+                    newExtractorLink(
+                        source = "Krakenfiles",
+                        name = "Krakenfiles (Server 4)",
+                        url = fixedUrl,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        // Referer video biasanya dari halaman embed itu sendiri
+                        this.referer = url
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 }
