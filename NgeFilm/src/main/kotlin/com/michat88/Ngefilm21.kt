@@ -23,18 +23,25 @@ class Ngefilm21 : MainAPI() {
     private val RPM_KEY = "6b69656d7469656e6d75613931316361" 
     private val RPM_IV  = "313233343536373839306f6975797472"
 
+    // --- PERBAIKAN POSTER HD ---
     private fun Element.getImageAttr(): String? {
-        val srcset = this.attr("srcset")
-        var url: String? = null
-        if (srcset.isNotEmpty()) {
-            try {
-                url = srcset.split(",").map { it.trim().split(" ") }
-                    .filter { it.size >= 2 }
-                    .maxByOrNull { it[1].replace("w", "").toIntOrNull() ?: 0 }?.get(0)
-            } catch (e: Exception) { }
+        // Coba ambil url dari data-src (lazy load) atau src biasa
+        var url = this.attr("data-src").ifEmpty { this.attr("src") }
+        
+        // Jika masih kosong, coba intip srcset
+        if (url.isEmpty()) {
+            val srcset = this.attr("srcset")
+            if (srcset.isNotEmpty()) {
+                // Ambil url pertama dari srcset sebagai fallback
+                url = srcset.split(",").firstOrNull()?.trim()?.split(" ")?.firstOrNull() ?: ""
+            }
         }
-        if (url.isNullOrEmpty()) url = this.attr("data-src").ifEmpty { this.attr("src") }
-        return if (!url.isNullOrEmpty()) httpsify(url) else null
+
+        return if (url.isNotEmpty()) {
+            // Hapus dimensi gambar (contoh: -60x90, -152x228) menggunakan Regex
+            // Ini akan mengubah "...gambar-60x90.jpg" menjadi "...gambar.jpg" (Original HD)
+            httpsify(url).replace(Regex("-\\d+x\\d+"), "")
+        } else null
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
@@ -95,16 +102,16 @@ class Ngefilm21 : MainAPI() {
                         val fixedUrl = if (playerUrl.startsWith("http")) playerUrl else "$mainUrl$playerUrl"
                         val pageContent = app.get(fixedUrl, headers = mapOf("User-Agent" to UA_BROWSER)).text 
 
-                        // [SERVER 1] RPM LIVE - DEKRIPSI AES (FIXED)
+                        // [SERVER 1] RPM LIVE - DEKRIPSI AES
                         val rpmMatch = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""").find(pageContent)
                         rpmMatch?.let { extractRpm(it.groupValues[1].ifEmpty { it.groupValues[2] }, callback) }
 
-                        // [SERVER 4] KRAKENFILES - ANTI 404
+                        // [SERVER 4] KRAKENFILES
                         Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""").findAll(pageContent).forEach { 
                             extractKrakenManual(it.groupValues[1], callback) 
                         }
 
-                        // [SERVER 2] ABYSS - REDIRECT FIX
+                        // [SERVER 2] ABYSS - REDIRECT
                         Regex("""src=["'](https://short\.icu/[^"']+)["']""").findAll(pageContent).forEach { 
                             val finalUrl = app.get(it.groupValues[1], headers = mapOf("Referer" to fixedUrl)).url
                             if (finalUrl.contains("abyss")) loadExtractor(finalUrl, subtitleCallback, callback)
