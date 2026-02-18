@@ -23,7 +23,6 @@ class Ngefilm21 : MainAPI() {
     private val RPM_KEY = "6b69656d7469656e6d75613931316361" 
     private val RPM_IV  = "313233343536373839306f6975797472"
 
-    // --- PERBAIKAN POSTER HD ---
     private fun Element.getImageAttr(): String? {
         var url = this.attr("data-src").ifEmpty { this.attr("src") }
         if (url.isEmpty()) {
@@ -33,6 +32,7 @@ class Ngefilm21 : MainAPI() {
             }
         }
         return if (url.isNotEmpty()) {
+            // Hapus dimensi gambar untuk dapat HD (cth: -60x90)
             httpsify(url).replace(Regex("-\\d+x\\d+"), "")
         } else null
     }
@@ -82,7 +82,7 @@ class Ngefilm21 : MainAPI() {
         val title = this.selectFirst(".entry-title a")?.text() ?: return null
         val href = this.selectFirst(".entry-title a")?.attr("href") ?: ""
         
-        // FIX QUALITY BADGE: Ambil teks langsung dari div pembungkusnya, bukan maksa cari <a>
+        // FIX QUALITY BADGE: Ambil teks langsung dari div pembungkusnya
         val qualityText = this.selectFirst(".gmr-quality-item")?.text()?.trim() ?: "HD"
         
         return newMovieSearchResponse(title, href, TvType.Movie) {
@@ -105,7 +105,10 @@ class Ngefilm21 : MainAPI() {
         val plotText = document.selectFirst("div.entry-content[itemprop='description'] p")?.text()?.trim() 
             ?: document.selectFirst("div.entry-content p")?.text()?.trim()
         val yearText = document.selectFirst(".gmr-moviedata a[href*='year']")?.text()?.toIntOrNull()
-        val ratingText = document.selectFirst("[itemprop='ratingValue']")?.text()?.toRatingInt()
+        
+        // FIX RATING (Jangan pakai .toRatingInt())
+        val ratingText = document.selectFirst("[itemprop='ratingValue']")?.text()?.trim()
+        
         val tagsList = document.select(".gmr-moviedata a[href*='genre']").map { it.text() }
         val actorsList = document.select("[itemprop='actors'] a").map { it.text() }
         val trailerUrl = document.selectFirst("a.gmr-trailer-popup")?.attr("href")
@@ -125,20 +128,30 @@ class Ngefilm21 : MainAPI() {
                 this.posterUrl = poster
                 this.plot = plotText
                 this.year = yearText
-                this.rating = ratingText
+                // FIX RATING: Pakai Score.from10
+                this.score = Score.from10(ratingText)
                 this.tags = tagsList
-                this.actors = actorsList
-                if (!trailerUrl.isNullOrEmpty()) addTrailer(trailerUrl)
+                // FIX ACTORS: Map string ke ActorData
+                this.actors = actorsList.map { ActorData(Actor(it)) }
+                // FIX TRAILER: Add manual ke list
+                if (!trailerUrl.isNullOrEmpty()) {
+                    this.trailers.add(TrailerData(trailerUrl, null, false))
+                }
             }
         } else {
             return newMovieLoadResponse(title, url, type, url) { 
                 this.posterUrl = poster
                 this.plot = plotText
                 this.year = yearText
-                this.rating = ratingText
+                // FIX RATING: Pakai Score.from10
+                this.score = Score.from10(ratingText)
                 this.tags = tagsList
-                this.actors = actorsList
-                if (!trailerUrl.isNullOrEmpty()) addTrailer(trailerUrl)
+                // FIX ACTORS: Map string ke ActorData
+                this.actors = actorsList.map { ActorData(Actor(it)) }
+                // FIX TRAILER: Add manual ke list
+                if (!trailerUrl.isNullOrEmpty()) {
+                    this.trailers.add(TrailerData(trailerUrl, null, false))
+                }
             }
         }
     }
