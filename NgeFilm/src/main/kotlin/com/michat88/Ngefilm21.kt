@@ -18,7 +18,7 @@ class Ngefilm21 : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
 
-    // Header Sakti (Pura-pura jadi Chrome Android)
+    // Header Sakti (Wajib sama persis dengan yang dites di Python)
     private val USER_AGENT_HACK = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
     // --- HELPER POSTER HD & VALID ---
@@ -27,13 +27,13 @@ class Ngefilm21 : MainAPI() {
         var url: String? = null
         
         if (srcset.isNotEmpty()) {
-            try {
-                url = srcset.split(",")
+            return try {
+                srcset.split(",")
                     .map { it.trim().split(" ") }
                     .filter { it.size >= 2 }
                     .maxByOrNull { it[1].replace("w", "").toIntOrNull() ?: 0 }
                     ?.get(0)
-            } catch (e: Exception) { }
+            } catch (e: Exception) { this.attr("src") }
         }
         
         if (url.isNullOrEmpty()) {
@@ -124,20 +124,21 @@ class Ngefilm21 : MainAPI() {
         val playerLinks = document.select(".muvipro-player-tabs a").mapNotNull { it.attr("href") }.toMutableList()
         if (playerLinks.isEmpty()) playerLinks.add(data)
 
-        // 2. Loop setiap Tab
+        // 2. Loop setiap Tab (Parallel)
         coroutineScope {
             playerLinks.distinct().map { playerUrl ->
                 async {
                     try {
                         val fixedUrl = if (playerUrl.startsWith("http")) playerUrl else "$mainUrl$playerUrl"
-                        val pageContent = app.get(fixedUrl).text 
+                        // Pakai header browser saat fetch halaman player juga
+                        val pageContent = app.get(fixedUrl, headers = mapOf("User-Agent" to USER_AGENT_HACK)).text 
 
-                        // [SERVER 4] KRAKENFILES - MANUAL FIX
+                        // [SERVER 4] KRAKENFILES - SUDAH FIX 404
                         Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""").findAll(pageContent).forEach { match ->
                             extractKrakenManual(match.groupValues[1], callback)
                         }
 
-                        // [SERVER 2] ABYSS (SHORT.ICU) - FIX REDIRECT
+                        // [SERVER 2] ABYSS / SHORT.ICU - FIX REDIRECT
                         Regex("""src=["'](https://short\.icu/[^"']+)["']""").findAll(pageContent).forEach { match ->
                             val shortUrl = match.groupValues[1]
                             try {
@@ -167,17 +168,17 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
-    // --- MANUAL KRAKEN (ANTI 404) ---
+    // --- MANUAL KRAKEN (ANTI ERROR 2004) ---
     private suspend fun extractKrakenManual(url: String, callback: (ExtractorLink) -> Unit) {
         try {
             val headers = mapOf("User-Agent" to USER_AGENT_HACK, "Referer" to mainUrl)
             val text = app.get(url, headers = headers).text
             
+            // Cari link video
             val videoUrl = Regex("""<source[^>]+src=["'](https:[^"']+)["']""").find(text)?.groupValues?.get(1)
                 ?: Regex("""src=["'](https:[^"']+/play/video/[^"']+)["']""").find(text)?.groupValues?.get(1)
             
             if (videoUrl != null) {
-                // Bersihkan URL
                 val cleanUrl = videoUrl.replace("&amp;", "&").replace("\\", "")
                 
                 callback.invoke(newExtractorLink(
@@ -187,7 +188,8 @@ class Ngefilm21 : MainAPI() {
                     type = ExtractorLinkType.VIDEO
                 ) {
                     this.referer = url
-                    // PENTING: Paksa header User-Agent yang sama ke player!
+                    // [KUNCI FIX] SUNTIKKAN HEADER BROWSER KE PLAYER
+                    // Ini yang bikin server "tertipu" dan mengira Player adalah Browser Chrome
                     this.headers = mapOf("User-Agent" to USER_AGENT_HACK) 
                     this.quality = Qualities.Unknown.value
                 })
