@@ -18,18 +18,29 @@ class Ngefilm21 : MainAPI() {
     override var lang = "id"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
 
-    // --- HELPER POSTER HD ---
+    // Header Sakti (Pura-pura jadi Chrome Android)
+    private val USER_AGENT_HACK = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+
+    // --- HELPER POSTER HD & VALID ---
     private fun Element.getImageAttr(): String? {
         val srcset = this.attr("srcset")
+        var url: String? = null
+        
         if (srcset.isNotEmpty()) {
-            return try {
-                srcset.split(",").map { it.trim().split(" ") }
+            try {
+                url = srcset.split(",")
+                    .map { it.trim().split(" ") }
                     .filter { it.size >= 2 }
                     .maxByOrNull { it[1].replace("w", "").toIntOrNull() ?: 0 }
                     ?.get(0)
-            } catch (e: Exception) { this.attr("src") }
+            } catch (e: Exception) { }
         }
-        return this.attr("data-src").ifEmpty { this.attr("src") }
+        
+        if (url.isNullOrEmpty()) {
+            url = this.attr("data-src").ifEmpty { this.attr("src") }
+        }
+        
+        return if (!url.isNullOrEmpty()) httpsify(url) else null
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
@@ -80,8 +91,7 @@ class Ngefilm21 : MainAPI() {
         }
         
         val isSeries = episodeElements.isNotEmpty()
-        // --- FIX: DEFINISI TYPE DI SINI ---
-        val type = if (isSeries) TvType.TvSeries else TvType.Movie 
+        val type = if (isSeries) TvType.TvSeries else TvType.Movie
 
         if (isSeries) {
             val episodes = episodeElements.mapNotNull { element ->
@@ -114,14 +124,18 @@ class Ngefilm21 : MainAPI() {
         val playerLinks = document.select(".muvipro-player-tabs a").mapNotNull { it.attr("href") }.toMutableList()
         if (playerLinks.isEmpty()) playerLinks.add(data)
 
-        // 2. Loop setiap Tab (Server 1, 2, 3, 4...)
-        // MENGGUNAKAN ASYNC (Agar tidak kena error 'apmap deprecated' dan tidak bikin lag)
+        // 2. Loop setiap Tab
         coroutineScope {
             playerLinks.distinct().map { playerUrl ->
                 async {
                     try {
                         val fixedUrl = if (playerUrl.startsWith("http")) playerUrl else "$mainUrl$playerUrl"
-                        val pageContent = app.get(fixedUrl).text // Fetch halaman player
+                        val pageContent = app.get(fixedUrl).text 
+
+                        // [SERVER 4] KRAKENFILES - MANUAL FIX
+                        Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""").findAll(pageContent).forEach { match ->
+                            extractKrakenManual(match.groupValues[1], callback)
+                        }
 
                         // [SERVER 2] ABYSS (SHORT.ICU) - FIX REDIRECT
                         Regex("""src=["'](https://short\.icu/[^"']+)["']""").findAll(pageContent).forEach { match ->
@@ -134,17 +148,12 @@ class Ngefilm21 : MainAPI() {
                             } catch (e: Exception) {}
                         }
 
-                        // [SERVER 4] KRAKENFILES - MANUAL FIX
-                        Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""").findAll(pageContent).forEach { match ->
-                            extractKrakenManual(match.groupValues[1], callback)
-                        }
-
-                        // [SERVER 5] MIXDROP / XSHOTCOK
+                        // [SERVER 5] MIXDROP
                         Regex("""src=["'](https://(?:xshotcok\.com|mixdrop\.[a-z]+)/embed-[^"']+)["']""").findAll(pageContent).forEach { match ->
                             loadExtractor(match.groupValues[1], subtitleCallback, callback)
                         }
 
-                        // [SERVER 1] RPM LIVE - AES FIX
+                        // [SERVER 1] RPM LIVE
                         val rpmMatch = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""").find(pageContent)
                         if (rpmMatch != null) {
                             val id = rpmMatch.groupValues[1].ifEmpty { rpmMatch.groupValues[2] }
@@ -158,29 +167,41 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
+    // --- MANUAL KRAKEN (ANTI 404) ---
     private suspend fun extractKrakenManual(url: String, callback: (ExtractorLink) -> Unit) {
         try {
-            val headers = mapOf("User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36", "Referer" to mainUrl)
+            val headers = mapOf("User-Agent" to USER_AGENT_HACK, "Referer" to mainUrl)
             val text = app.get(url, headers = headers).text
+            
             val videoUrl = Regex("""<source[^>]+src=["'](https:[^"']+)["']""").find(text)?.groupValues?.get(1)
                 ?: Regex("""src=["'](https:[^"']+/play/video/[^"']+)["']""").find(text)?.groupValues?.get(1)
             
             if (videoUrl != null) {
-                callback.invoke(newExtractorLink("Krakenfiles", "Krakenfiles", videoUrl.replace("&amp;", "&").replace("\\", ""), ExtractorLinkType.VIDEO) {
+                // Bersihkan URL
+                val cleanUrl = videoUrl.replace("&amp;", "&").replace("\\", "")
+                
+                callback.invoke(newExtractorLink(
+                    source = "Krakenfiles",
+                    name = "Krakenfiles",
+                    url = cleanUrl,
+                    type = ExtractorLinkType.VIDEO
+                ) {
                     this.referer = url
+                    // PENTING: Paksa header User-Agent yang sama ke player!
+                    this.headers = mapOf("User-Agent" to USER_AGENT_HACK) 
                     this.quality = Qualities.Unknown.value
                 })
             }
         } catch (e: Exception) {}
     }
 
-    // RPM Encryption Constants
+    // --- RPM ENCRYPTION ---
     private val AES_KEY = "6b69656d7469656e6d75613931316361"
     private val AES_IV = "313233343536373839306f6975797472"
 
     private suspend fun extractRpm(id: String, callback: (ExtractorLink) -> Unit) {
         try {
-            val h = mapOf("Referer" to "https://playerngefilm21.rpmlive.online/", "Origin" to "https://playerngefilm21.rpmlive.online")
+            val h = mapOf("Referer" to "https://playerngefilm21.rpmlive.online/", "Origin" to "https://playerngefilm21.rpmlive.online", "User-Agent" to USER_AGENT_HACK)
             val info = decryptAES(app.get("https://playerngefilm21.rpmlive.online/api/v1/info?id=$id", headers = h).text)
             val pid = Regex(""""playerId"\s*:\s*"([^"]+)"""").find(info)?.groupValues?.get(1) ?: return
             
