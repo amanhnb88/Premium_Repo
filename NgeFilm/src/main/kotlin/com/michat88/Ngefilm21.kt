@@ -15,11 +15,6 @@ class Ngefilm21 : MainAPI() {
         TvType.AsianDrama
     )
 
-    private fun Element.getImageAttr(): String? {
-        val url = this.attr("data-src").ifEmpty { this.attr("src") }
-        return url.replace(Regex("-\\d+x\\d+"), "")
-    }
-
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val document = app.get("$mainUrl/page/$page/").document
         val home = document.select("article.item-infinite").mapNotNull { it.toSearchResult() }
@@ -30,7 +25,7 @@ class Ngefilm21 : MainAPI() {
         val titleElement = this.selectFirst(".entry-title a") ?: return null
         val title = titleElement.text()
         val href = titleElement.attr("href")
-        val posterUrl = this.selectFirst(".content-thumbnail img")?.getImageAttr()
+        val posterUrl = this.selectFirst(".content-thumbnail img")?.attr("src")
         val quality = this.selectFirst(".gmr-quality-item a")?.text() ?: "HD"
         val ratingText = this.selectFirst(".gmr-rating-item")?.text()?.trim()
 
@@ -50,11 +45,12 @@ class Ngefilm21 : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
         val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: ""
-        val poster = document.selectFirst(".gmr-movie-data figure img")?.getImageAttr()
+        val poster = document.selectFirst(".gmr-movie-data figure img")?.attr("src")
         val plot = document.selectFirst("div.entry-content[itemprop='description'] p")?.text()?.trim()
         val year = document.selectFirst(".gmr-moviedata:contains(Tahun) a")?.text()?.trim()?.toIntOrNull()
         val ratingText = document.selectFirst("span[itemprop='ratingValue']")?.text()?.trim()
         val tags = document.select(".gmr-moviedata:contains(Genre) a").map { it.text() }
+        
         val actors = document.select("span[itemprop='actors'] a").mapNotNull {
             val name = it.text()
             if (name.isNotBlank()) ActorData(Actor(name, null)) else null
@@ -119,47 +115,45 @@ class Ngefilm21 : MainAPI() {
     ): Boolean {
         val rawHtml = app.get(data).text
 
-        // --- HANYA SERVER 4 (KRAKENFILES) ---
-        // Cari URL Embed: https://krakenfiles.com/embed-video/ID
+        // --- HANYA FOKUS KRAKENFILES ---
+        // Mencari iframe dengan src yang mengandung krakenfiles
+        // Pola dari HTML kamu: src="https://krakenfiles.com/embed-video/jaf54pxroA"
         val krakenRegex = Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""")
         
         krakenRegex.findAll(rawHtml).forEach { match ->
             val embedUrl = match.groupValues[1]
-            // Langsung bongkar manual, jangan pakai extractor bawaan
-            extractKrakenManual(embedUrl, callback)
+            // Kita coba 2 cara: Manual (Prioritas) dan Bawaan (Cadangan)
+            if (!extractKrakenManual(embedUrl, callback)) {
+                loadExtractor(embedUrl, subtitleCallback, callback)
+            }
         }
 
         return true
     }
 
-    private suspend fun extractKrakenManual(url: String, callback: (ExtractorLink) -> Unit) {
-        try {
-            // Header WAJIB (Sesuai script Python yang sukses)
+    // Fungsi Manual: Buka halaman embed, cari link video di dalamnya
+    private suspend fun extractKrakenManual(url: String, callback: (ExtractorLink) -> Unit): Boolean {
+        return try {
             val headers = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
                 "Referer" to "https://new31.ngefilm.site/",
-                "Origin" to "https://new31.ngefilm.site",
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+                "Origin" to "https://new31.ngefilm.site"
             )
 
-            // Request halaman embed dan ambil TEXT mentahnya (bukan document parsed)
             val responseText = app.get(url, headers = headers).text
 
-            // --- JURUS REGEX ---
-            // Mencari <source src="..."> tanpa Jsoup, karena lebih reliable untuk Kraken
-            // Pola: src="https://...krakencloud... ... "
-            val videoRegex = Regex("""src=["'](https:[^"']+\.mp4[^"']*)["']""")
+            // Cari link video. Sesuai temuan Python:
+            // src="https://phs9.krakencloud.net/play/video/..."
+            val videoRegex = Regex("""src=["'](https:[^"']+/play/video/[^"']+)["']""")
             val match = videoRegex.find(responseText)
 
             if (match != null) {
-                var videoUrl = match.groupValues[1]
-                // Fix URL jika ada backslash (format JSON string kadang ada)
-                videoUrl = videoUrl.replace("\\", "")
-
+                val videoUrl = match.groupValues[1].replace("\\", "")
+                
                 callback.invoke(
                     newExtractorLink(
                         source = "Krakenfiles",
-                        name = "Krakenfiles (Server 4)",
+                        name = "Krakenfiles (Manual)",
                         url = videoUrl,
                         type = ExtractorLinkType.VIDEO
                     ) {
@@ -167,28 +161,13 @@ class Ngefilm21 : MainAPI() {
                         this.quality = Qualities.Unknown.value
                     }
                 )
+                true // Berhasil
             } else {
-                // Cadangan: Coba cari pola data-src-url
-                val dataSrcRegex = Regex("""data-src-url=["'](https:[^"']+)["']""")
-                val dataMatch = dataSrcRegex.find(responseText)
-                
-                if (dataMatch != null) {
-                    var videoUrl = dataMatch.groupValues[1].replace("\\", "")
-                    callback.invoke(
-                        newExtractorLink(
-                            source = "Krakenfiles",
-                            name = "Krakenfiles (Backup)",
-                            url = videoUrl,
-                            type = ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = url
-                            this.quality = Qualities.Unknown.value
-                        }
-                    )
-                }
+                false // Gagal temu pola
             }
         } catch (e: Exception) {
             e.printStackTrace()
+            false
         }
     }
 }
