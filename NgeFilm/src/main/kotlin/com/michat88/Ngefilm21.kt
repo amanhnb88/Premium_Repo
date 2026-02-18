@@ -39,7 +39,6 @@ class Ngefilm21 : MainAPI() {
     }
 
     // --- DAFTAR KATEGORI ---
-    // Format: "Nama Kategori" to "URL Bagian Belakang"
     private val categories = listOf(
         Pair("Upload Terbaru", ""), // Kosong berarti halaman utama
         Pair("Indonesia Movie", "/country/indonesia"),
@@ -51,33 +50,33 @@ class Ngefilm21 : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        // Menggunakan apmap untuk load semua kategori secara paralel (cepat)
-        val homeItems = categories.apmap { (title, urlPath) ->
-            // Logika Pembentukan URL Halaman (Pagination)
-            val finalUrl = if (urlPath.isEmpty()) {
-                // Upload Terbaru: https://site.com/page/1/
-                "$mainUrl/page/$page/"
-            } else if (urlPath.contains("?")) {
-                // Tipe Search: https://site.com/page/1/?s=...
-                val split = urlPath.split("?")
-                "$mainUrl/page/$page/?${split[1]}"
-            } else {
-                // Tipe Negara/Kategori: https://site.com/country/indonesia/page/1/
-                "$mainUrl$urlPath/page/$page/"
-            }
+        // FIX: Mengganti apmap dengan coroutineScope + async + awaitAll
+        val homeItems = coroutineScope {
+            categories.map { (title, urlPath) ->
+                async {
+                    // Logika Pembentukan URL Halaman (Pagination)
+                    val finalUrl = if (urlPath.isEmpty()) {
+                        "$mainUrl/page/$page/"
+                    } else if (urlPath.contains("?")) {
+                        val split = urlPath.split("?")
+                        "$mainUrl/page/$page/?${split[1]}"
+                    } else {
+                        "$mainUrl$urlPath/page/$page/"
+                    }
 
-            try {
-                val document = app.get(finalUrl).document
-                val items = document.select("article.item-infinite").mapNotNull { it.toSearchResult() }
-                
-                // Jika items ditemukan, buat list horizontal
-                if (items.isNotEmpty()) {
-                    HomePageList(title, items)
-                } else null
-            } catch (e: Exception) {
-                null
-            }
-        }.filterNotNull()
+                    try {
+                        val document = app.get(finalUrl).document
+                        val items = document.select("article.item-infinite").mapNotNull { it.toSearchResult() }
+                        
+                        if (items.isNotEmpty()) {
+                            HomePageList(title, items)
+                        } else null
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
 
         return newHomePageResponse(homeItems, hasNext = true)
     }
