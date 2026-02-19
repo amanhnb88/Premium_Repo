@@ -139,44 +139,40 @@ class Ngefilm21 : MainAPI() {
                 async {
                     try {
                         val fixedUrl = if (playerUrl.startsWith("http")) playerUrl else "$mainUrl$playerUrl"
-                        System.out.println("NGEFILM CHECK: $fixedUrl")
+                        // println("NGEFILM CHECK: $fixedUrl")
                         val pageContent = app.get(fixedUrl, headers = mapOf("User-Agent" to UA_BROWSER)).text 
 
                         // [SERVER 1] RPM LIVE
                         val rpmMatch = Regex("""rpmlive\.online.*?[#&?]id=([a-zA-Z0-9]+)|rpmlive\.online.*?#([a-zA-Z0-9]+)""").find(pageContent)
                         rpmMatch?.let { extractRpm(it.groupValues[1].ifEmpty { it.groupValues[2] }, callback) }
 
-                        // [SERVER 3] MASUKESTIN / HGLINK / VIBUXER (FIXED REGEX)
-                        // Menggunakan (?i) untuk case insensitive dan \s* untuk toleransi spasi
+                        // [SERVER 3] VIBUXER / HGLINK / MASUKESTIN
                         val vibuxerRegex = Regex("""(?i)(?:src|href)\s*=\s*["'](https://(?:hglink\.(?:to|com|net)|vibuxer\.(?:com|net|to)|masukestin\.(?:com|net))/e/[a-zA-Z0-9]+)["']""")
                         vibuxerRegex.findAll(pageContent).forEach { 
                             val rawUrl = it.groupValues[1]
-                            System.out.println("NGEFILM FOUND MASUKESTIN: $rawUrl")
-                            
-                            // Paksa ganti ke domain masukestin.com
                             val targetUrl = rawUrl.replace("hglink.to", "masukestin.com")
                                                   .replace("hglink.net", "masukestin.com")
                                                   .replace("vibuxer.com", "masukestin.com")
-                            
                             extractMasukestin(targetUrl, callback) 
                         }
 
                         // [SERVER 4] KRAKENFILES
-                        Regex("""(?i)src\s*=\s*["'](https://krakenfiles\.com/embed-video/[^"']+)["']""").findAll(pageContent).forEach { 
+                        Regex("""src=["'](https://krakenfiles\.com/embed-video/[^"']+)["']""").findAll(pageContent).forEach { 
                             extractKrakenManual(it.groupValues[1], callback) 
                         }
 
-                        // [SERVER 2 & 5] GENERIC EXTRACTORS (XSHOTCOK / MIXDROP)
-                        // Perbaikan Utama: Regex Case Insensitive (?i) agar bisa menangkap "SRC=" atau "src="
-                        Regex("""(?i)(?:src|href)\s*=\s*["'](https://[^"']*(?:short\.icu|mixdrop|xshotcok)[^"']*)["']""").findAll(pageContent).forEach { 
+                        // [SERVER 2 & 5] GENERIC & XSHOTCOK FIX
+                        // Regex diperbaiki: Case Insensitive (?i) agar menangkap SRC= (huruf besar)
+                        Regex("""(?i)src=["'](https://[^"']*(?:short\.icu|mixdrop|xshotcok|hxfile)[^"']*)["']""").findAll(pageContent).forEach { 
                             val url = it.groupValues[1]
-                            System.out.println("NGEFILM GENERIC FOUND: $url")
                             
-                            if (url.contains("short.icu")) {
+                            if (url.contains("xshotcok") || url.contains("hxfile")) {
+                                // Panggil fungsi khusus Xshotcok yang baru
+                                extractXshotcok(url, callback)
+                            } else if (url.contains("short.icu")) {
                                 val finalUrl = app.get(url, headers = mapOf("Referer" to fixedUrl)).url
                                 if (finalUrl.contains("abyss")) loadExtractor(finalUrl, subtitleCallback, callback)
                             } else {
-                                // Menyerahkan link Xshotcok yang sudah tertangkap ke Cloudstream Extractor
                                 loadExtractor(url, subtitleCallback, callback)
                             }
                         }
@@ -187,7 +183,55 @@ class Ngefilm21 : MainAPI() {
         return true
     }
 
-    // --- MASUKESTIN LOGIC (Server 3) ---
+    // --- XSHOTCOK / SERVER 5 BYPASS (NEW) ---
+    private suspend fun extractXshotcok(url: String, callback: (ExtractorLink) -> Unit) {
+        try {
+            // 1. Request dengan Header Browser agar tidak kena 'Embeds disabled'
+            val response = app.get(url, headers = mapOf(
+                "User-Agent" to UA_BROWSER,
+                "Referer" to mainUrl // Kunci: Referer dari website utama
+            )).text
+
+            // 2. Cari Kode Packed JS
+            val packedRegex = Regex("""eval\(function\(p,a,c,k,e,d.*?\.split\('\|'\)\)""")
+            val packedCode = packedRegex.find(response)?.value
+
+            if (packedCode != null) {
+                // 3. Unpack JS
+                val unpackedJs = Unpacker.unpack(packedCode)
+                
+                // 4. Cari Link M3U8 di dalam hasil unpack
+                // Regex ini mencari URL .m3u8 yang diapit kutip (seperti yang kita temukan di Python)
+                val m3u8Regex = Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""")
+                val match = m3u8Regex.find(unpackedJs)
+
+                match?.groupValues?.get(1)?.let { rawLink ->
+                    // Bersihkan escaping slash
+                    val cleanLink = rawLink.replace("\\/", "/")
+
+                    callback.invoke(
+                        newExtractorLink(
+                            "Xshotcok",
+                            "Server 5 (Xshotcok)",
+                            cleanLink,
+                            ExtractorLinkType.M3U8
+                        ) {
+                            // Referer saat memutar video harus dari domain embed
+                            this.headers = mapOf(
+                                "User-Agent" to UA_BROWSER,
+                                "Referer" to url,
+                                "Origin" to "https://xshotcok.com"
+                            )
+                        }
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    // --- MASUKESTIN / HGLINK LOGIC ---
     private suspend fun extractMasukestin(url: String, callback: (ExtractorLink) -> Unit) {
         try {
             val domain = "masukestin.com" 
@@ -201,18 +245,13 @@ class Ngefilm21 : MainAPI() {
             val doc = response.text
             val cookies = response.cookies
             val videoId = url.substringAfter("/e/").substringBefore("?").substringBefore("\"").substringBefore("'")
-
             val packedRegex = Regex("""eval\(function\(p,a,c,k,e,d.*?\.split\('\|'\)\)""")
             val packedCode = packedRegex.find(doc)?.value
 
             if (packedCode != null) {
                 val unpackedJs = Unpacker.unpack(packedCode)
-                System.out.println("NGEFILM UNPACKED SUCCESS")
-
-                // Cari link M3U8 langsung di hasil unpack (Sapu Jagat)
                 var linkM3u8 = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(unpackedJs)?.groupValues?.get(1)
 
-                // Backup API jika tidak ketemu langsung
                 if (linkM3u8 == null) {
                     val hashMatch = Regex("""hash\s*:\s*["']([^"']+)["']""").find(unpackedJs)
                     val hash = hashMatch?.groupValues?.get(1)
@@ -234,26 +273,33 @@ class Ngefilm21 : MainAPI() {
                     if (linkM3u8!!.startsWith("/")) {
                         linkM3u8 = "https://$domain$linkM3u8"
                     }
-                    System.out.println("NGEFILM FINAL M3U8: $linkM3u8")
-
                     callback.invoke(
                         newExtractorLink(
-                            "Masukestin", "Masukestin (Server 3)", linkM3u8!!, ExtractorLinkType.M3U8
+                            "Masukestin",
+                            "Masukestin (Server 3)",
+                            linkM3u8!!,
+                            ExtractorLinkType.M3U8
                         ) {
-                            this.headers = mapOf("User-Agent" to UA_BROWSER, "Referer" to "https://$domain/", "Origin" to "https://$domain")
+                            this.headers = mapOf(
+                                "User-Agent" to UA_BROWSER,
+                                "Referer" to "https://$domain/",
+                                "Origin" to "https://$domain"
+                            )
                         }
                     )
                 }
             } else {
-                // Fallback jika tidak ada packed JS
-                var directM3u8 = Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""").find(doc)?.groupValues?.get(1)
+                var directM3u8 = Regex("""["']([^"']+\.m3u8[^"']*)["']""").find(doc)?.groupValues?.get(1)
                 if (directM3u8 != null) {
                      directM3u8 = directM3u8!!.replace("\\/", "/")
                      if (directM3u8!!.startsWith("/")) directM3u8 = "https://$domain$directM3u8"
                      
                      callback.invoke(
                         newExtractorLink(
-                            "Masukestin", "Masukestin (Direct)", directM3u8!!, ExtractorLinkType.M3U8
+                            "Masukestin",
+                            "Masukestin (Direct)",
+                            directM3u8!!,
+                            ExtractorLinkType.M3U8
                         ) {
                             this.headers = mapOf("User-Agent" to UA_BROWSER, "Referer" to "https://$domain/")
                         }
