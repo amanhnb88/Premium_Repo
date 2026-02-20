@@ -35,7 +35,7 @@ class RebahinProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val url = if (page == 1) request.data.replace("page/", "") else request.data + page
+        val url = if (page == 1) request.data.removeSuffix("page/") else request.data + page
         val document = app.get(url).document
 
         val home = document.select("div.ml-item").mapNotNull {
@@ -44,18 +44,13 @@ class RebahinProvider : MainAPI() {
         return newHomePageResponse(request.name, home)
     }
 
-    // PERBAIKAN PENCARIAN (SEARCH)
     override suspend fun search(query: String): List<SearchResponse> {
-        // Tema Dooplay biasanya membutuhkan URL seperti ini untuk pencarian
         val url = "$mainUrl/?s=$query"
         val document = app.get(url).document
 
-        // Mengambil dari div.ml-item DAN tag artikel (berjaga-jaga jika struktur pencarian berubah)
-        val searchResults = document.select("div.ml-item, div.result-item").mapNotNull {
+        return document.select("div.ml-item, div.result-item").mapNotNull {
             it.toSearchResult()
         }
-        
-        return searchResults
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -119,7 +114,8 @@ class RebahinProvider : MainAPI() {
             val seasonMatch = Regex("""Season\s+(\d+)""", RegexOption.IGNORE_CASE).find(title)
             val seasonNum = seasonMatch?.groupValues?.get(1)?.toIntOrNull()
 
-            document.select("div#list-eps a.btn-eps").forEach { epsNode ->
+            // Ambil episode dari daftar #list-eps
+            document.select("div#list-eps a.btn-eps, div.list-eps a.btn-eps").forEach { epsNode ->
                 val encodedIframe = epsNode.attr("data-iframe")
                 if (encodedIframe.isNotBlank()) {
                     val epName = epsNode.text()
@@ -141,6 +137,26 @@ class RebahinProvider : MainAPI() {
                         this.season = seasonNum
                     }
                 )
+            }
+
+            // SISTEM FALLBACK: Jika kosong, cari apakah ada server ala Movie (Bisa jadi cuma 1 episode)
+            if (episodes.isEmpty()) {
+                val servers = document.select("div.server-wrapper div.server")
+                if (servers.isNotEmpty()) {
+                    val urlList = servers.mapNotNull { 
+                        val encoded = it.attr("data-iframe")
+                        if (encoded.isNotBlank()) String(Base64.decode(encoded, Base64.DEFAULT)) else null
+                    }
+                    if (urlList.isNotEmpty()) {
+                        episodes.add(
+                            newEpisode(urlList.toJson()) {
+                                this.name = "Episode 1"
+                                this.episode = 1
+                                this.season = seasonNum ?: 1
+                            }
+                        )
+                    }
+                }
             }
             
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
