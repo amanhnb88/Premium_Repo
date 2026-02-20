@@ -44,23 +44,28 @@ class RebahinProvider : MainAPI() {
         return newHomePageResponse(request.name, home)
     }
 
+    // PERBAIKAN PENCARIAN (SEARCH)
     override suspend fun search(query: String): List<SearchResponse> {
+        // Tema Dooplay biasanya membutuhkan URL seperti ini untuk pencarian
         val url = "$mainUrl/?s=$query"
         val document = app.get(url).document
 
-        return document.select("div.ml-item").mapNotNull {
+        // Mengambil dari div.ml-item DAN tag artikel (berjaga-jaga jika struktur pencarian berubah)
+        val searchResults = document.select("div.ml-item, div.result-item").mapNotNull {
             it.toSearchResult()
         }
+        
+        return searchResults
     }
 
-    // PERBAIKAN POSTER ADA DI FUNGSI INI
     private fun Element.toSearchResult(): SearchResponse? {
         val href = this.selectFirst("a")?.attr("href") ?: return null
         val title = this.selectFirst("a")?.attr("title") ?: this.selectFirst("span.mli-info h2")?.text() ?: return null
         
-        // Logika Poster Pintar: Prioritaskan data-original, kalau kosong baru ambil src
         val imgNode = this.selectFirst("img")
-        val posterUrl = imgNode?.attr("data-original")?.takeIf { it.isNotBlank() } ?: imgNode?.attr("src")
+        var posterUrl = imgNode?.attr("data-original")
+        if (posterUrl.isNullOrBlank()) posterUrl = imgNode?.attr("data-src")
+        if (posterUrl.isNullOrBlank()) posterUrl = imgNode?.attr("src")
         
         val quality = this.selectFirst("span.mli-quality")?.text()
         
@@ -68,12 +73,12 @@ class RebahinProvider : MainAPI() {
 
         return if (isTvSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-                this.posterUrl = posterUrl
+                this.posterUrl = fixUrlNull(posterUrl)
                 this.quality = getQualityFromString(quality)
             }
         } else {
             newMovieSearchResponse(title, href, TvType.Movie) {
-                this.posterUrl = posterUrl
+                this.posterUrl = fixUrlNull(posterUrl)
                 this.quality = getQualityFromString(quality)
             }
         }
@@ -82,10 +87,20 @@ class RebahinProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
 
-        val title = document.selectFirst("meta[itemprop=name]")?.attr("content") 
-            ?: document.selectFirst("h3")?.text() ?: "Unknown"
+        var title = document.selectFirst("meta[property=og:title]")?.attr("content")
+        if (title != null) {
+            title = title.substringBefore(" |").replace("Nonton Film ", "").replace("Nonton Series ", "").trim()
+        } else {
+            title = document.selectFirst("meta[itemprop=name]")?.attr("content") 
+                ?: document.selectFirst("h3")?.text() 
+                ?: "Unknown"
+        }
             
-        val poster = document.selectFirst("meta[itemprop=image]")?.attr("content") 
+        var poster = document.selectFirst("meta[property=og:image]")?.attr("content")
+        if (poster.isNullOrBlank()) poster = document.selectFirst("meta[itemprop=image]")?.attr("content")
+        if (poster.isNullOrBlank()) poster = document.selectFirst("div.mvic-thumb img")?.attr("data-original")
+        if (poster.isNullOrBlank()) poster = document.selectFirst("div.mvic-thumb img")?.attr("src")
+        
         val year = document.selectFirst("meta[itemprop=datePublished]")?.attr("content")?.substringBefore("-")?.toIntOrNull()
         
         val plot = document.select("div.desc-des-pendek p").joinToString("\n") { it.text() }.trim().ifEmpty { 
@@ -93,7 +108,6 @@ class RebahinProvider : MainAPI() {
         }
         
         val ratingText = document.selectFirst("div.averagerate")?.text()
-
         val tagsList = document.select("span[itemprop=genre]").map { it.text() }
 
         val isTvSeries = url.contains("/series/") || document.selectFirst("div#list-eps") != null
@@ -130,7 +144,7 @@ class RebahinProvider : MainAPI() {
             }
             
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-                this.posterUrl = poster
+                this.posterUrl = fixUrlNull(poster)
                 this.plot = plot
                 this.year = year
                 this.score = Score.from(ratingText, 5)
@@ -138,7 +152,7 @@ class RebahinProvider : MainAPI() {
             }
         } else {
             return newMovieLoadResponse(title, url, TvType.Movie, url) {
-                this.posterUrl = poster
+                this.posterUrl = fixUrlNull(poster)
                 this.plot = plot
                 this.year = year
                 this.score = Score.from(ratingText, 5)
