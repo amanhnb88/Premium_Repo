@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.getAndUnpack
 import com.lagradost.cloudstream3.utils.loadExtractor
@@ -190,27 +191,23 @@ class RebahinProvider : MainAPI() {
             var finalUrl = url
             
             if (finalUrl.contains("short.icu")) {
-                // Bypass redirect short.icu untuk mendapatkan URL tujuan asli
                 finalUrl = app.get(finalUrl, allowRedirects = true).url 
             }
 
-            // 1. Coba berikan ke Extractor bawaan Cloudstream
+            // Coba dengan extractor bawaan
             loadExtractor(finalUrl, referer, subtitleCallback, callback)
 
-            // 2. Ekstrak rahasia dari Server Privat Rebahin (IP based) / AbyssCDN
             val ipRegex = Regex("""https?://\d+\.\d+\.\d+\.\d+/.*""")
             
             if (ipRegex.matches(finalUrl) || finalUrl.contains("abysscdn.com")) {
                 val embedText = app.get(finalUrl, referer = referer).text
                 val unpacked = getAndUnpack(embedText)
                 
-                // PERBAIKAN REGEX: Hanya mencari 'file:' atau 'source:', DILARANG MENCARI 'src='
                 val videoRegex = """["']?(?:file|source)["']?\s*:\s*["'](https?://[^"']+)["']""".toRegex(RegexOption.IGNORE_CASE)
                 
                 val allMatches = videoRegex.findAll(unpacked).map { it.groupValues[1] }.toList() + 
                                  videoRegex.findAll(embedText).map { it.groupValues[1] }.toList()
                 
-                // Saring URL agar tidak mengambil file subtitle/gambar
                 val streamUrl = allMatches.firstOrNull { 
                     !it.endsWith(".vtt") && !it.endsWith(".srt") && !it.endsWith(".jpg") && !it.endsWith(".png") 
                 }
@@ -219,14 +216,15 @@ class RebahinProvider : MainAPI() {
                     val isM3u = it.contains(".m3u8") || it.contains("/stream/") || it.contains("hls")
                     val sourceName = if (finalUrl.contains("abysscdn")) "AbyssCDN (HD)" else "Rebahin VIP"
                     
+                    // PERBAIKAN: Menggunakan newExtractorLink builder
                     callback.invoke(
-                        ExtractorLink(
-                            source = this.name,
+                        newExtractorLink(
+                            source = this@RebahinProvider.name,
                             name = sourceName,
                             url = it,
                             referer = finalUrl,
                             quality = Qualities.Unknown.value,
-                            isM3u8 = isM3u
+                            type = if (isM3u) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                         )
                     )
                 }
