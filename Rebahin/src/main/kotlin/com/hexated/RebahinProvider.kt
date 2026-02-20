@@ -83,41 +83,38 @@ class RebahinProvider : MainAPI() {
         }
     }
 
-    // ================================================================
-    // PENCARIAN
-    // ================================================================
     override suspend fun search(query: String): List<SearchResponse> {
         return app.get("$mainUrl/?s=$query", headers = mapOf("User-Agent" to userAgent))
             .document.select(".ml-item").mapNotNull { it.toSearchResult() }
     }
 
     // ================================================================
-    // DETAIL FILM / SERIES (DIPERBARUI TOTAL)
+    // DETAIL FILM / SERIES
     // ================================================================
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url, headers = mapOf("User-Agent" to userAgent)).document
 
-        // Mengambil judul bersih langsung dari meta attribute halaman yang baru
         val title = doc.selectFirst("h3[itemprop=name]")?.attr("content") 
             ?: doc.selectFirst("meta[property=og:title]")?.attr("content")?.substringBefore(" |")
             ?: return null
 
-        // Mengambil poster dari meta tag og:image (kualitas HD, tidak hancur)
         val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")
+            ?: doc.selectFirst("a.mvi-cover")?.attr("style")?.let { Regex("""url\((.*?)\)""").find(it)?.groupValues?.get(1) }
 
-        // Ekstrak info meta lainnya sesuai struktur Dooplay
         val plot = doc.selectFirst("div[itemprop=description], div.desc")?.text()
         val rating = doc.selectFirst("span[itemprop=ratingValue], span.irank-voters")?.text()
         val genres = doc.select("span[itemprop=genre]").map { it.text() }
         val year = doc.selectFirst("meta[itemprop=datePublished]")?.attr("content")?.substringBefore("-")?.toIntOrNull()
 
-        // Pengecekan jenis film atau series
+        // Ambil trailer (Hanya jika linknya valid dari Youtube, bukan link palsu bawaan Dooplay)
+        val trailerUrl = doc.selectFirst("iframe#iframe-trailer")?.attr("src")
+        val isValidTrailer = trailerUrl != null && trailerUrl.contains("youtube") && !trailerUrl.contains("youtube.com/1")
+
         val isSeries = url.contains("/series/") || url.contains("/tv/") || doc.selectFirst("ul.episodios") != null
 
         return if (isSeries) {
             val episodes = mutableListOf<Episode>()
-            // Parsing untuk rute episode (Mendukung struktur dooplay: ul.episodios)
-            doc.select("ul.episodios li a, div.gmr-episodelist a").forEachIndexed { index, ep ->
+            doc.select("ul.episodios li a, div.gmr-episodelist a, #list-eps a, a.btn-eps").forEachIndexed { index, ep ->
                 val epUrl = ep.attr("href")
                 if (epUrl.isNotEmpty()) {
                     val epText = ep.text()
@@ -137,22 +134,24 @@ class RebahinProvider : MainAPI() {
                 this.score = Score.from10(rating) 
                 this.tags = genres
                 this.year = year
+                if (isValidTrailer) addTrailer(trailerUrl)
             }
         } else {
-            // Arahkan ke halaman utama player (Contoh: /play/ otomatis akan ditarik oleh sistem)
-            val playUrl = if (url.endsWith("/")) "${url}play/" else "$url/play/"
+            val playUrl = url.trimEnd('/') + "/play/?ep=2&sv=1"
+            
             newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
                 this.posterUrl = poster
                 this.plot = plot
                 this.score = Score.from10(rating)
                 this.tags = genres
                 this.year = year
+                if (isValidTrailer) addTrailer(trailerUrl)
             }
         }
     }
 
     // ================================================================
-    // EKSTRAK LINK VIDEO
+    // EKSTRAK LINK VIDEO (DIPERBARUI DENGAN BASE64 DECODE)
     // ================================================================
     override suspend fun loadLinks(
         data: String,
@@ -160,7 +159,7 @@ class RebahinProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // STEP 1: Akses halaman /play/
+        // STEP 1: Akses halaman play
         val playDoc = app.get(
             data,
             headers = mapOf(
@@ -170,50 +169,45 @@ class RebahinProvider : MainAPI() {
             )
         ).document
 
-        // STEP 2: Temukan iframe /iembed/
-        val iembedSrc = playDoc
-            .select("iframe[src*='/iembed/'], iframe[data-src*='/iembed/']")
-            .firstOrNull()
-            ?.let { it.attr("src").ifEmpty { it.attr("data-src") } }
+        var handled = false
 
-        if (iembedSrc != null) {
-            val fullUrl = if (iembedSrc.startsWith("http")) iembedSrc else "$mainUrl$iembedSrc"
-            processIembed(fullUrl, data, subtitleCallback, callback)
-        } else {
-            // Coba iframe biasa jika ada
-            playDoc.select("iframe[src], iframe[data-src]").forEach { iframe ->
-                val src = iframe.attr("src").ifEmpty { iframe.attr("data-src") }
-                if (src.isNotEmpty()) loadExtractor(src, data, subtitleCallback, callback)
+        // STEP 2: Cari atribut "data-iframe" di list server yang berisi Base64 URL
+        playDoc.select(".server[data-iframe]").forEach { serverTag ->
+            val base64Iframe = serverTag.attr("data-iframe")
+            if (base64Iframe.isNotEmpty()) {
+                // Decode base64 menjadi URL asli (misal: https://95.214.54.154/embed/...)
+                val embedUrl = runCatching {
+                    String(Base64.getDecoder().decode(base64Iframe))
+                }.getOrNull()
+
+                if (embedUrl != null) {
+                    handled = true
+                    if (embedUrl.contains("95.214.54.154") || embedUrl.contains("rebahin")) {
+                        // Jalankan bypass API kita jika itu server internal mereka
+                        processExternalEmbed(embedUrl, data, subtitleCallback, callback)
+                    } else {
+                        // Jika server eksternal (misal short.icu, streamtape, dsb), lempar ke Extractor bawaan CloudStream
+                        loadExtractor(embedUrl, data, subtitleCallback, callback)
+                    }
+                }
             }
         }
 
-        return true
-    }
-
-    private suspend fun processIembed(
-        iembedUrl: String,
-        referer: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        val sourceParam = Regex("[?&]source=([A-Za-z0-9+/=]+)").find(iembedUrl)?.groupValues?.get(1)
-        val embedUrl = runCatching {
-            sourceParam?.let { String(Base64.getDecoder().decode(it)) }
-        }.getOrNull()
-
-        if (embedUrl != null) {
-            processExternalEmbed(embedUrl, iembedUrl, subtitleCallback, callback)
-        } else {
-            val doc = app.get(
-                iembedUrl,
-                headers = mapOf("User-Agent" to userAgent, "Referer" to referer)
-            ).document
-            doc.select("iframe[src]").forEach { iframe ->
-                loadExtractor(iframe.attr("src"), iembedUrl, subtitleCallback, callback)
+        // Fallback: Jika tidak menemukan data-iframe, baru kita cari iframe src biasa
+        if (!handled) {
+            playDoc.select("iframe[src]").forEach { iframe ->
+                val src = iframe.attr("src")
+                if (src.isNotEmpty() && !src.contains("youtube") && !src.contains("googleusercontent")) {
+                    loadExtractor(src, data, subtitleCallback, callback)
+                    handled = true
+                }
             }
         }
+
+        return handled
     }
 
+    // ── STEP 3: Parsing HTML server embed ─────────────────────────────
     private suspend fun processExternalEmbed(
         embedUrl: String,
         referer: String,
@@ -265,6 +259,7 @@ class RebahinProvider : MainAPI() {
         }
     }
 
+    // ── STEP 4: Tembak API /ping rahasia untuk mendapatkan Video ──────
     private suspend fun processApiPing(
         baseOrigin: String,
         apiPath: String,
