@@ -106,7 +106,7 @@ class RebahinProvider : MainAPI() {
         val genres = doc.select("span[itemprop=genre]").map { it.text() }
         val year = doc.selectFirst("meta[itemprop=datePublished]")?.attr("content")?.substringBefore("-")?.toIntOrNull()
 
-        // Ambil trailer (Hanya jika linknya valid dari Youtube, bukan link palsu bawaan Dooplay)
+        // Trailer Parser
         val trailerUrl = doc.selectFirst("iframe#iframe-trailer")?.attr("src")
         val isValidTrailer = trailerUrl != null && trailerUrl.contains("youtube") && !trailerUrl.contains("youtube.com/1")
 
@@ -134,7 +134,10 @@ class RebahinProvider : MainAPI() {
                 this.score = Score.from10(rating) 
                 this.tags = genres
                 this.year = year
-                if (isValidTrailer) addTrailer(trailerUrl)
+                // PERBAIKAN: Gunakan TrailerData langsung
+                if (isValidTrailer && trailerUrl != null) {
+                    this.trailers.add(TrailerData(trailerUrl, null, false))
+                }
             }
         } else {
             val playUrl = url.trimEnd('/') + "/play/?ep=2&sv=1"
@@ -145,13 +148,16 @@ class RebahinProvider : MainAPI() {
                 this.score = Score.from10(rating)
                 this.tags = genres
                 this.year = year
-                if (isValidTrailer) addTrailer(trailerUrl)
+                // PERBAIKAN: Gunakan TrailerData langsung
+                if (isValidTrailer && trailerUrl != null) {
+                    this.trailers.add(TrailerData(trailerUrl, null, false))
+                }
             }
         }
     }
 
     // ================================================================
-    // EKSTRAK LINK VIDEO (DIPERBARUI DENGAN BASE64 DECODE)
+    // EKSTRAK LINK VIDEO (BASE64 DECODE)
     // ================================================================
     override suspend fun loadLinks(
         data: String,
@@ -159,7 +165,7 @@ class RebahinProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // STEP 1: Akses halaman play
+        // Akses halaman play
         val playDoc = app.get(
             data,
             headers = mapOf(
@@ -171,11 +177,10 @@ class RebahinProvider : MainAPI() {
 
         var handled = false
 
-        // STEP 2: Cari atribut "data-iframe" di list server yang berisi Base64 URL
+        // Cari atribut "data-iframe" di list server yang berisi Base64 URL
         playDoc.select(".server[data-iframe]").forEach { serverTag ->
             val base64Iframe = serverTag.attr("data-iframe")
             if (base64Iframe.isNotEmpty()) {
-                // Decode base64 menjadi URL asli (misal: https://95.214.54.154/embed/...)
                 val embedUrl = runCatching {
                     String(Base64.getDecoder().decode(base64Iframe))
                 }.getOrNull()
@@ -183,17 +188,15 @@ class RebahinProvider : MainAPI() {
                 if (embedUrl != null) {
                     handled = true
                     if (embedUrl.contains("95.214.54.154") || embedUrl.contains("rebahin")) {
-                        // Jalankan bypass API kita jika itu server internal mereka
                         processExternalEmbed(embedUrl, data, subtitleCallback, callback)
                     } else {
-                        // Jika server eksternal (misal short.icu, streamtape, dsb), lempar ke Extractor bawaan CloudStream
                         loadExtractor(embedUrl, data, subtitleCallback, callback)
                     }
                 }
             }
         }
 
-        // Fallback: Jika tidak menemukan data-iframe, baru kita cari iframe src biasa
+        // Fallback: Jika tidak menemukan data-iframe
         if (!handled) {
             playDoc.select("iframe[src]").forEach { iframe ->
                 val src = iframe.attr("src")
@@ -207,7 +210,7 @@ class RebahinProvider : MainAPI() {
         return handled
     }
 
-    // ── STEP 3: Parsing HTML server embed ─────────────────────────────
+    // ── Parsing HTML server embed ─────────────────────────────
     private suspend fun processExternalEmbed(
         embedUrl: String,
         referer: String,
@@ -259,7 +262,7 @@ class RebahinProvider : MainAPI() {
         }
     }
 
-    // ── STEP 4: Tembak API /ping rahasia untuk mendapatkan Video ──────
+    // ── Tembak API /ping rahasia untuk mendapatkan Video ──────
     private suspend fun processApiPing(
         baseOrigin: String,
         apiPath: String,
