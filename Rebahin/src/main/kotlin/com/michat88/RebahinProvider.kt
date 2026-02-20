@@ -80,6 +80,7 @@ class RebahinProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
+        // 1. HALAMAN DETAIL (METADATA & TRAILER)
         val document = app.get(url).document
 
         var title = document.selectFirst("meta[property=og:title]")?.attr("content")
@@ -105,17 +106,35 @@ class RebahinProvider : MainAPI() {
         val ratingText = document.selectFirst("div.averagerate")?.text()
         val tagsList = document.select("span[itemprop=genre]").map { it.text() }
 
+        // MENGAMBIL TRAILER YOUTUBE (Dari id iframe-trailer)
+        var trailerUrl = document.selectFirst("iframe#iframe-trailer")?.attr("src")
+        if (trailerUrl != null && trailerUrl.contains("youtube.com")) {
+            if (trailerUrl.startsWith("//")) trailerUrl = "https:$trailerUrl"
+        } else {
+            trailerUrl = null
+        }
+
         val isTvSeries = url.contains("/series/") || document.selectFirst("div#list-eps") != null
 
+        // 2. MENCARI URL HALAMAN 'PLAY' ATAU 'WATCH'
+        var playUrl = document.selectFirst("#mv-info a.mvi-cover")?.attr("href")
+            ?: document.selectFirst("a.bwac-btn, div.bwa-content a, a.play-btn")?.attr("href")
+            
+        if (playUrl.isNullOrBlank()) {
+            val baseUrl = url.removeSuffix("/")
+            playUrl = if (isTvSeries) "$baseUrl/watch/" else "$baseUrl/play/"
+        }
+        playUrl = fixUrl(playUrl)
+
         if (isTvSeries) {
+            val playDoc = app.get(playUrl).document
             val episodes = mutableListOf<Episode>()
             val epsMap = mutableMapOf<Int, MutableList<String>>()
             
             val seasonMatch = Regex("""Season\s+(\d+)""", RegexOption.IGNORE_CASE).find(title)
             val seasonNum = seasonMatch?.groupValues?.get(1)?.toIntOrNull()
 
-            // Ambil episode dari daftar #list-eps
-            document.select("div#list-eps a.btn-eps, div.list-eps a.btn-eps").forEach { epsNode ->
+            playDoc.select("div#list-eps a.btn-eps, div.list-eps a.btn-eps").forEach { epsNode ->
                 val encodedIframe = epsNode.attr("data-iframe")
                 if (encodedIframe.isNotBlank()) {
                     val epName = epsNode.text()
@@ -139,9 +158,8 @@ class RebahinProvider : MainAPI() {
                 )
             }
 
-            // SISTEM FALLBACK: Jika kosong, cari apakah ada server ala Movie (Bisa jadi cuma 1 episode)
             if (episodes.isEmpty()) {
-                val servers = document.select("div.server-wrapper div.server")
+                val servers = playDoc.select("div.server-wrapper div.server")
                 if (servers.isNotEmpty()) {
                     val urlList = servers.mapNotNull { 
                         val encoded = it.attr("data-iframe")
@@ -165,14 +183,16 @@ class RebahinProvider : MainAPI() {
                 this.year = year
                 this.score = Score.from(ratingText, 5)
                 this.tags = tagsList
+                this.trailerUrl = trailerUrl // Memasukkan URL Trailer
             }
         } else {
-            return newMovieLoadResponse(title, url, TvType.Movie, url) {
+            return newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
                 this.posterUrl = fixUrlNull(poster)
                 this.plot = plot
                 this.year = year
                 this.score = Score.from(ratingText, 5)
                 this.tags = tagsList
+                this.trailerUrl = trailerUrl // Memasukkan URL Trailer
             }
         }
     }
