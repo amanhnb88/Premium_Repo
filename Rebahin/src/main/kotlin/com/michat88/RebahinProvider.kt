@@ -20,16 +20,15 @@ class RebahinProvider : MainAPI() {
         TvType.AsianDrama
     )
 
+    // Bagian yang diperbarui: Daftar kategori halaman utama
     override val mainPage = mainPageOf(
-        "$mainUrl/movies/page/" to "Film Terbaru",
-        "$mainUrl/series/page/" to "Serial TV",
-        "$mainUrl/genre/animation/page/" to "Anime",
-        "$mainUrl/genre/westseries/page/" to "Series Barat",
-        "$mainUrl/genre/drama-jepang/page/" to "Drama Jepang",
-        "$mainUrl/genre/drama-korea/page/" to "Drama Korea",
-        "$mainUrl/genre/drama-china/page/" to "Drama Mandarin",
-        "$mainUrl/genre/thailand-series/page/" to "Series Thailand",
-        "$mainUrl/genre/series-indonesia/page/" to "Series Indonesia"
+        "$mainUrl/country/indonesia/page/" to "Film Indo",
+        "$mainUrl/genre/series-indonesia/page/" to "SeriesTV Indo",
+        "$mainUrl/genre/action/page/" to "Action Movie",
+        "$mainUrl/genre/adventure/page/" to "Petualangan",
+        "$mainUrl/genre/horror/page/" to "Horror",
+        "$mainUrl/country/south-korea/page/" to "Korea",
+        "$mainUrl/genre/adult/page/" to "VivaMax"
     )
 
     override suspend fun getMainPage(
