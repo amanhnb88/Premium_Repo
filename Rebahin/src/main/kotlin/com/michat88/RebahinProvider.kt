@@ -2,13 +2,9 @@ package com.michat88
 
 import android.util.Base64
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.getAndUnpack
-import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
 
 class RebahinProvider : MainAPI() {
@@ -91,7 +87,6 @@ class RebahinProvider : MainAPI() {
             document.selectFirst("div.desc")?.text() ?: ""
         }
         
-        // KOREKSI UTAMA: Mengambil text asli (misal "4.16") tanpa perlu dikalikan 20 lagi
         val ratingText = document.selectFirst("div.averagerate")?.text()
 
         val tagsList = document.select("span[itemprop=genre]").map { it.text() }
@@ -133,8 +128,7 @@ class RebahinProvider : MainAPI() {
                 this.posterUrl = poster
                 this.plot = plot
                 this.year = year
-                // MENGGUNAKAN SCORE BUILDER DARI MainAPI.kt
-                this.score = Score.from(ratingText, 5) 
+                this.score = Score.from(ratingText, 5)
                 this.tags = tagsList
             }
         } else {
@@ -142,7 +136,6 @@ class RebahinProvider : MainAPI() {
                 this.posterUrl = poster
                 this.plot = plot
                 this.year = year
-                // MENGGUNAKAN SCORE BUILDER DARI MainAPI.kt
                 this.score = Score.from(ratingText, 5)
                 this.tags = tagsList
             }
