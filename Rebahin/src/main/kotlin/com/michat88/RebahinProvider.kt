@@ -3,7 +3,6 @@ package com.michat88
 import android.util.Base64
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.getAndUnpack
 import org.jsoup.nodes.Element
 
 class RebahinProvider : MainAPI() {
@@ -18,7 +17,6 @@ class RebahinProvider : MainAPI() {
         TvType.AsianDrama
     )
 
-    // Daftar kategori halaman utama dari Anda
     override val mainPage = mainPageOf(
         "$mainUrl/country/indonesia/page/" to "Film Indo",
         "$mainUrl/genre/series-indonesia/page/" to "SeriesTV Indo",
@@ -69,7 +67,6 @@ class RebahinProvider : MainAPI() {
         val poster = document.selectFirst("img[itemprop=image], div.mvic-thumb img, div.poster img")?.attr("src")
         val plot = document.selectFirst("div.mvic-desc, div.f-desc, div.entry-content")?.text()
         
-        // PENTING: Untuk situs Rebahin, halaman pemutarnya biasanya ditambahkan '/play/' di akhir URL
         val playUrl = if (url.endsWith("/")) "${url}play/" else "$url/play/"
 
         return newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
@@ -87,28 +84,23 @@ class RebahinProvider : MainAPI() {
         try {
             val document = app.get(data).document
             
-            // --- HASIL INVESTIGASI KITA: Ekstraksi atribut data-iframe ---
+            // Mencari server embed dari atribut data-iframe
             val servers = document.select("div[data-iframe]")
             
             servers.forEach { element ->
                 val base64Url = element.attr("data-iframe")
                 
                 if (base64Url.isNotBlank()) {
-                    // Mendecode URL server embed asli
                     val finalUrl = String(Base64.decode(base64Url, Base64.DEFAULT))
                     
-                    // Kita coba lempar ke extractor bawaan Cloudstream dulu
+                    // 1. Ekstraktor bawaan Cloudstream (Kemungkinan besar ini yang akan menangkap videonya)
                     loadExtractor(finalUrl, data, subtitleCallback, callback)
                     
-                    // --- LOGIKA REGEX BAWAAN ANDA SEBAGAI BACKUP ---
+                    // 2. Backup manual pencarian regex jika extractor bawaan gagal
                     val embedText = app.get(finalUrl).text
-                    val unpacked = getAndUnpack(embedText) // Menggunakan fungsi unpacker Cloudstream
-                    
                     val videoRegex = """["']?(?:file|source)["']?\s*:\s*["'](https?://[^"']+)["']""".toRegex(RegexOption.IGNORE_CASE)
                     
-                    val allMatches = videoRegex.findAll(unpacked).map { it.groupValues[1] }.toList() + 
-                                     videoRegex.findAll(embedText).map { it.groupValues[1] }.toList()
-                    
+                    val allMatches = videoRegex.findAll(embedText).map { it.groupValues[1] }.toList()
                     val streamUrl = allMatches.firstOrNull { 
                         !it.endsWith(".vtt") && !it.endsWith(".srt") && !it.endsWith(".jpg") && !it.endsWith(".png") 
                     }
@@ -117,15 +109,17 @@ class RebahinProvider : MainAPI() {
                         val isM3u = url.contains(".m3u8") || url.contains("/stream/") || url.contains("hls")
                         val sourceName = if (finalUrl.contains("abysscdn")) "AbyssCDN (HD)" else "Rebahin VIP"
                         
+                        // MENGGUNAKAN STANDAR BARU (Sesuai snippet awal Anda)
                         callback.invoke(
-                            ExtractorLink(
+                            newExtractorLink(
                                 source = this@RebahinProvider.name,
                                 name = sourceName,
                                 url = url,
-                                referer = finalUrl,
-                                quality = Qualities.Unknown.value,
-                                isM3u8 = isM3u
-                            )
+                                type = if (isM3u) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = finalUrl
+                                this.quality = Qualities.Unknown.value
+                            }
                         )
                     }
                 }
