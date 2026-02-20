@@ -2,13 +2,9 @@ package com.michat88
 
 import android.util.Base64
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.getAndUnpack
-import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
 
 class RebahinProvider : MainAPI() {
@@ -194,7 +190,6 @@ class RebahinProvider : MainAPI() {
                 finalUrl = app.get(finalUrl, allowRedirects = true).url 
             }
 
-            // Coba dengan extractor bawaan
             loadExtractor(finalUrl, referer, subtitleCallback, callback)
 
             val ipRegex = Regex("""https?://\d+\.\d+\.\d+\.\d+/.*""")
@@ -216,16 +211,17 @@ class RebahinProvider : MainAPI() {
                     val isM3u = it.contains(".m3u8") || it.contains("/stream/") || it.contains("hls")
                     val sourceName = if (finalUrl.contains("abysscdn")) "AbyssCDN (HD)" else "Rebahin VIP"
                     
-                    // PERBAIKAN: Menggunakan newExtractorLink builder
+                    // KOREKSI UTAMA: Menggunakan initializer builder '{ }'
                     callback.invoke(
                         newExtractorLink(
                             source = this@RebahinProvider.name,
                             name = sourceName,
                             url = it,
-                            referer = finalUrl,
-                            quality = Qualities.Unknown.value,
                             type = if (isM3u) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                        )
+                        ) {
+                            this.referer = finalUrl
+                            this.quality = Qualities.Unknown.value
+                        }
                     )
                 }
             }
