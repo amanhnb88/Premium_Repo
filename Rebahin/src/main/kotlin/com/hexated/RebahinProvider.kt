@@ -60,22 +60,32 @@ class RebahinProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page == 1) request.data else "${request.data}page/$page/"
         val document = app.get(url, headers = mapOf("User-Agent" to userAgent)).document
-        val home = document.select("article.item").mapNotNull { it.toSearchResult() }
+        
+        // PERUBAHAN: Selector diganti ke .ml-item
+        val home = document.select(".ml-item").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, home)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title  = this.selectFirst("h3 a, h2 a")?.text() ?: return null
-        val href   = this.selectFirst("h3 a, h2 a")?.attr("href") ?: return null
+        val a = this.selectFirst("a") ?: return null
+        val href = a.attr("href")
+        // Ambil judul dari attribute title atau text h2
+        val title = a.attr("title").ifEmpty { this.selectFirst("h2")?.text() } ?: return null
+        
         val poster = this.selectFirst("img")?.let {
             it.attr("data-src").ifEmpty { it.attr("src") }
         }
+        
+        // Cek apakah ini serial TV
         val type = if (
+            this.selectFirst(".mli-eps") != null ||
             this.selectFirst(".gmr-episode-item") != null ||
             href.contains("/series/") || href.contains("/tv/")
         ) TvType.TvSeries else TvType.Movie
 
-        return newMovieSearchResponse(title, href, type) { this.posterUrl = poster }
+        return newMovieSearchResponse(title, href, type) { 
+            this.posterUrl = poster 
+        }
     }
 
     // ================================================================
@@ -83,7 +93,8 @@ class RebahinProvider : MainAPI() {
     // ================================================================
     override suspend fun search(query: String): List<SearchResponse> {
         return app.get("$mainUrl/?s=$query", headers = mapOf("User-Agent" to userAgent))
-            .document.select("article.item").mapNotNull { it.toSearchResult() }
+            // PERUBAHAN: Selector diganti ke .ml-item
+            .document.select(".ml-item").mapNotNull { it.toSearchResult() }
     }
 
     // ================================================================
