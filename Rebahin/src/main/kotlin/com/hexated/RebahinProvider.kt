@@ -23,12 +23,10 @@ class RebahinProvider : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes     = setOf(TvType.Movie, TvType.TvSeries)
 
-    // User-Agent yang sama persis dengan yang digunakan website
     private val userAgent =
         "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
-    // Data Class untuk parsing JSON API agar lebih aman
     data class ApiPingResponse(
         @JsonProperty("file") val file: String? = null,
         @JsonProperty("sources") val sources: List<ApiSource>? = null
@@ -61,7 +59,6 @@ class RebahinProvider : MainAPI() {
         val url = if (page == 1) request.data else "${request.data}page/$page/"
         val document = app.get(url, headers = mapOf("User-Agent" to userAgent)).document
         
-        // PERUBAHAN: Selector diganti ke .ml-item
         val home = document.select(".ml-item").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, home)
     }
@@ -69,14 +66,12 @@ class RebahinProvider : MainAPI() {
     private fun Element.toSearchResult(): SearchResponse? {
         val a = this.selectFirst("a") ?: return null
         val href = a.attr("href")
-        // Ambil judul dari attribute title atau text h2
         val title = a.attr("title").ifEmpty { this.selectFirst("h2")?.text() } ?: return null
         
         val poster = this.selectFirst("img")?.let {
             it.attr("data-src").ifEmpty { it.attr("src") }
         }
         
-        // Cek apakah ini serial TV
         val type = if (
             this.selectFirst(".mli-eps") != null ||
             this.selectFirst(".gmr-episode-item") != null ||
@@ -93,42 +88,49 @@ class RebahinProvider : MainAPI() {
     // ================================================================
     override suspend fun search(query: String): List<SearchResponse> {
         return app.get("$mainUrl/?s=$query", headers = mapOf("User-Agent" to userAgent))
-            // PERUBAHAN: Selector diganti ke .ml-item
             .document.select(".ml-item").mapNotNull { it.toSearchResult() }
     }
 
     // ================================================================
-    // DETAIL FILM / SERIES
+    // DETAIL FILM / SERIES (DIPERBARUI TOTAL)
     // ================================================================
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url, headers = mapOf("User-Agent" to userAgent)).document
 
-        val title  = doc.selectFirst("h1.entry-title")?.text() ?: return null
-        val poster = doc.selectFirst("div.gmr-movie-data img, div.thumb img")
-            ?.let { it.attr("data-src").ifEmpty { it.attr("src") } }
-        val plot   = doc.selectFirst("div.entry-content p, div.gmr-movie-description p")?.text()
-        val rating = doc.selectFirst("span.gmr-ratingscore")?.text()
-        val genres = doc.select("span.gmr-movie-genre a").map { it.text() }
-        val year   = doc.selectFirst("span.gmr-movie-year")?.text()?.trim()?.toIntOrNull()
+        // Mengambil judul bersih langsung dari meta attribute halaman yang baru
+        val title = doc.selectFirst("h3[itemprop=name]")?.attr("content") 
+            ?: doc.selectFirst("meta[property=og:title]")?.attr("content")?.substringBefore(" |")
+            ?: return null
 
-        val isSeries = doc.selectFirst("div.gmr-episodelist") != null ||
-                url.contains("/series/") || url.contains("/tv/")
+        // Mengambil poster dari meta tag og:image (kualitas HD, tidak hancur)
+        val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")
+
+        // Ekstrak info meta lainnya sesuai struktur Dooplay
+        val plot = doc.selectFirst("div[itemprop=description], div.desc")?.text()
+        val rating = doc.selectFirst("span[itemprop=ratingValue], span.irank-voters")?.text()
+        val genres = doc.select("span[itemprop=genre]").map { it.text() }
+        val year = doc.selectFirst("meta[itemprop=datePublished]")?.attr("content")?.substringBefore("-")?.toIntOrNull()
+
+        // Pengecekan jenis film atau series
+        val isSeries = url.contains("/series/") || url.contains("/tv/") || doc.selectFirst("ul.episodios") != null
 
         return if (isSeries) {
             val episodes = mutableListOf<Episode>()
-            doc.select("div.gmr-episodelist a, ul.list-episode a, .episodelist a")
-                .forEachIndexed { index, ep ->
-                    val epUrl = ep.attr("href")
-                    if (epUrl.isNotEmpty()) {
-                        val epNum = Regex("[?&]ep=(\\d+)").find(epUrl)
-                            ?.groupValues?.get(1)?.toIntOrNull() ?: (index + 1)
-                        episodes.add(newEpisode(epUrl) {
-                            this.name    = ep.text().ifEmpty { "Episode $epNum" }
-                            this.season  = 1
-                            this.episode = epNum
-                        })
-                    }
+            // Parsing untuk rute episode (Mendukung struktur dooplay: ul.episodios)
+            doc.select("ul.episodios li a, div.gmr-episodelist a").forEachIndexed { index, ep ->
+                val epUrl = ep.attr("href")
+                if (epUrl.isNotEmpty()) {
+                    val epText = ep.text()
+                    val epNum = Regex("Episode\\s*(\\d+)").find(epText)?.groupValues?.get(1)?.toIntOrNull()
+                        ?: Regex("[?&]ep=(\\d+)").find(epUrl)?.groupValues?.get(1)?.toIntOrNull() 
+                        ?: (index + 1)
+                    episodes.add(newEpisode(epUrl) {
+                        this.name    = epText.ifEmpty { "Episode $epNum" }
+                        this.season  = 1
+                        this.episode = epNum
+                    })
                 }
+            }
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.plot = plot
@@ -137,7 +139,9 @@ class RebahinProvider : MainAPI() {
                 this.year = year
             }
         } else {
-            newMovieLoadResponse(title, url, TvType.Movie, "$url/play/?ep=1&sv=1") {
+            // Arahkan ke halaman utama player (Contoh: /play/ otomatis akan ditarik oleh sistem)
+            val playUrl = if (url.endsWith("/")) "${url}play/" else "$url/play/"
+            newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
                 this.posterUrl = poster
                 this.plot = plot
                 this.score = Score.from10(rating)
@@ -156,8 +160,7 @@ class RebahinProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-
-        // ── STEP 1: Akses halaman /play/ ──────────────────────────────
+        // STEP 1: Akses halaman /play/
         val playDoc = app.get(
             data,
             headers = mapOf(
@@ -167,7 +170,7 @@ class RebahinProvider : MainAPI() {
             )
         ).document
 
-        // ── STEP 2: Temukan iframe /iembed/?source=BASE64 ─────────────
+        // STEP 2: Temukan iframe /iembed/
         val iembedSrc = playDoc
             .select("iframe[src*='/iembed/'], iframe[data-src*='/iembed/']")
             .firstOrNull()
@@ -177,7 +180,7 @@ class RebahinProvider : MainAPI() {
             val fullUrl = if (iembedSrc.startsWith("http")) iembedSrc else "$mainUrl$iembedSrc"
             processIembed(fullUrl, data, subtitleCallback, callback)
         } else {
-            // Fallback: iframe biasa
+            // Coba iframe biasa jika ada
             playDoc.select("iframe[src], iframe[data-src]").forEach { iframe ->
                 val src = iframe.attr("src").ifEmpty { iframe.attr("data-src") }
                 if (src.isNotEmpty()) loadExtractor(src, data, subtitleCallback, callback)
@@ -187,7 +190,6 @@ class RebahinProvider : MainAPI() {
         return true
     }
 
-    // ── STEP 2→3: Decode base64 → akses embed server ─────────────────
     private suspend fun processIembed(
         iembedUrl: String,
         referer: String,
@@ -202,7 +204,6 @@ class RebahinProvider : MainAPI() {
         if (embedUrl != null) {
             processExternalEmbed(embedUrl, iembedUrl, subtitleCallback, callback)
         } else {
-            // Akses iembed langsung, cari iframe di dalamnya
             val doc = app.get(
                 iembedUrl,
                 headers = mapOf("User-Agent" to userAgent, "Referer" to referer)
@@ -213,7 +214,6 @@ class RebahinProvider : MainAPI() {
         }
     }
 
-    // ── STEP 3→4: Parsing embed server ───────────────────────────────
     private suspend fun processExternalEmbed(
         embedUrl: String,
         referer: String,
@@ -265,7 +265,6 @@ class RebahinProvider : MainAPI() {
         }
     }
 
-    // ── STEP 4: POST ke /api/videos/.../ping ─────────────────────────
     private suspend fun processApiPing(
         baseOrigin: String,
         apiPath: String,
@@ -301,7 +300,6 @@ class RebahinProvider : MainAPI() {
             var found = false
             val cdnToken = generateCdnToken()
 
-            // Fungsi lokal menyematkan token jika URL dari CDN yg membutuhkannya
             fun appendToken(url: String): String {
                 if (cdnToken == null) return url
                 return if (url.contains("daisy.groovy.monster") && !url.contains("token=")) {
@@ -309,7 +307,6 @@ class RebahinProvider : MainAPI() {
                 } else url
             }
 
-            // Menggunakan fungsi tryParseJson agar lebih aman
             val apiData = tryParseJson<ApiPingResponse>(responseText)
 
             apiData?.sources?.forEach { source ->
@@ -328,7 +325,6 @@ class RebahinProvider : MainAPI() {
                 callback.invoke(buildExtractorLink(finalUrl, embedUrl, isM3u8))
             }
 
-            // Fallback Regex
             if (!found) {
                 Regex(""""(https?://[^"]+\.m3u8[^"]*)"""").findAll(responseText).forEach { m ->
                     found = true
@@ -347,7 +343,6 @@ class RebahinProvider : MainAPI() {
         }
     }
 
-    // ── HELPER: Menarik IP Publik Pengguna & Membuat Token CDN ───────
     private suspend fun getClientIp(): String? {
         return try {
             app.get("https://api.ipify.org").text.trim()
@@ -362,7 +357,6 @@ class RebahinProvider : MainAPI() {
         return Base64.getEncoder().encodeToString(raw.toByteArray())
     }
 
-    // ── HELPER: Buat ExtractorLink dengan builder terbaru ────────────
     private suspend fun buildExtractorLink(
         url: String,
         referer: String,
