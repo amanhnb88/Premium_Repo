@@ -80,7 +80,7 @@ class RebahinProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // 1. HALAMAN DETAIL (METADATA & TRAILER)
+        // 1. Ekstraksi Metadata di Halaman Detail
         val document = app.get(url).document
 
         var title = document.selectFirst("meta[property=og:title]")?.attr("content")
@@ -106,7 +106,6 @@ class RebahinProvider : MainAPI() {
         val ratingText = document.selectFirst("div.averagerate")?.text()
         val tagsList = document.select("span[itemprop=genre]").map { it.text() }
 
-        // MENGAMBIL TRAILER YOUTUBE (Dari id iframe-trailer)
         var trailerUrl = document.selectFirst("iframe#iframe-trailer")?.attr("src")
         if (trailerUrl != null && trailerUrl.contains("youtube.com")) {
             if (trailerUrl.startsWith("//")) trailerUrl = "https:$trailerUrl"
@@ -116,7 +115,7 @@ class RebahinProvider : MainAPI() {
 
         val isTvSeries = url.contains("/series/") || document.selectFirst("div#list-eps") != null
 
-        // 2. MENCARI URL HALAMAN 'PLAY' ATAU 'WATCH'
+        // 2. Mencari Halaman Play Sesungguhnya
         var playUrl = document.selectFirst("#mv-info a.mvi-cover")?.attr("href")
             ?: document.selectFirst("a.bwac-btn, div.bwa-content a, a.play-btn")?.attr("href")
             
@@ -183,16 +182,17 @@ class RebahinProvider : MainAPI() {
                 this.year = year
                 this.score = Score.from(ratingText, 5)
                 this.tags = tagsList
-                this.trailerUrl = trailerUrl // Memasukkan URL Trailer
+                this.trailerUrl = trailerUrl
             }
         } else {
+            // Kita jadikan 'playUrl' sebagai 'data' yang akan dikirim ke loadLinks
             return newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
                 this.posterUrl = fixUrlNull(poster)
                 this.plot = plot
                 this.year = year
                 this.score = Score.from(ratingText, 5)
                 this.tags = tagsList
-                this.trailerUrl = trailerUrl // Memasukkan URL Trailer
+                this.trailerUrl = trailerUrl
             }
         }
     }
@@ -204,6 +204,7 @@ class RebahinProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         
+        // Handle list URL (Untuk TV Series)
         if (data.startsWith("[")) {
             val urls = tryParseJson<List<String>>(data)
             urls?.forEach { url ->
@@ -212,6 +213,7 @@ class RebahinProvider : MainAPI() {
             return true
         }
 
+        // Handle halaman Play (Untuk Movie)
         val document = app.get(data).document
         val servers = document.select("div.server-wrapper div.server")
 
