@@ -106,9 +106,9 @@ class RebahinProvider : MainAPI() {
         val genres = doc.select("span[itemprop=genre]").map { it.text() }
         val year = doc.selectFirst("meta[itemprop=datePublished]")?.attr("content")?.substringBefore("-")?.toIntOrNull()
 
-        // Trailer Parser
+        // Trailer Parser (Menghindari trailer rusak bawaan situs)
         val trailerUrl = doc.selectFirst("iframe#iframe-trailer")?.attr("src")
-        val isValidTrailer = trailerUrl != null && trailerUrl.contains("youtube") && !trailerUrl.contains("youtube.com/1")
+        val isValidTrailer = trailerUrl != null && trailerUrl.contains("youtube") && !trailerUrl.contains("http://googleusercontent.com/youtube.com")
 
         val isSeries = url.contains("/series/") || url.contains("/tv/") || doc.selectFirst("ul.episodios") != null
 
@@ -134,21 +134,18 @@ class RebahinProvider : MainAPI() {
                 this.score = Score.from10(rating) 
                 this.tags = genres
                 this.year = year
-                // PERBAIKAN: Gunakan TrailerData langsung
                 if (isValidTrailer && trailerUrl != null) {
                     this.trailers.add(TrailerData(trailerUrl, null, false))
                 }
             }
         } else {
-            val playUrl = url.trimEnd('/') + "/play/?ep=2&sv=1"
-            
-            newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
+            // PERUBAHAN: Gunakan url asli film secara langsung, tidak perlu ditambahkan /play/
+            newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
                 this.plot = plot
                 this.score = Score.from10(rating)
                 this.tags = genres
                 this.year = year
-                // PERBAIKAN: Gunakan TrailerData langsung
                 if (isValidTrailer && trailerUrl != null) {
                     this.trailers.add(TrailerData(trailerUrl, null, false))
                 }
@@ -157,7 +154,7 @@ class RebahinProvider : MainAPI() {
     }
 
     // ================================================================
-    // EKSTRAK LINK VIDEO (BASE64 DECODE)
+    // EKSTRAK LINK VIDEO (BASE64 DECODE AMAN)
     // ================================================================
     override suspend fun loadLinks(
         data: String,
@@ -165,7 +162,7 @@ class RebahinProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Akses halaman play
+        // Akses halaman data (bisa halaman detail film atau halaman episode)
         val playDoc = app.get(
             data,
             headers = mapOf(
@@ -179,30 +176,38 @@ class RebahinProvider : MainAPI() {
 
         // Cari atribut "data-iframe" di list server yang berisi Base64 URL
         playDoc.select(".server[data-iframe]").forEach { serverTag ->
-            val base64Iframe = serverTag.attr("data-iframe")
-            if (base64Iframe.isNotEmpty()) {
-                val embedUrl = runCatching {
-                    String(Base64.getDecoder().decode(base64Iframe))
-                }.getOrNull()
+            try {
+                val base64Iframe = serverTag.attr("data-iframe")
+                if (base64Iframe.isNotEmpty()) {
+                    val embedUrl = runCatching {
+                        String(Base64.getDecoder().decode(base64Iframe))
+                    }.getOrNull()
 
-                if (embedUrl != null) {
-                    handled = true
-                    if (embedUrl.contains("95.214.54.154") || embedUrl.contains("rebahin")) {
-                        processExternalEmbed(embedUrl, data, subtitleCallback, callback)
-                    } else {
-                        loadExtractor(embedUrl, data, subtitleCallback, callback)
+                    if (embedUrl != null) {
+                        handled = true
+                        if (embedUrl.contains("95.214.54.154") || embedUrl.contains("rebahin")) {
+                            processExternalEmbed(embedUrl, data, subtitleCallback, callback)
+                        } else {
+                            loadExtractor(embedUrl, data, subtitleCallback, callback)
+                        }
                     }
                 }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
 
-        // Fallback: Jika tidak menemukan data-iframe
+        // Fallback: Jika tidak ada data-iframe, barangkali ada iframe biasa (jarang terjadi di tema ini)
         if (!handled) {
             playDoc.select("iframe[src]").forEach { iframe ->
-                val src = iframe.attr("src")
-                if (src.isNotEmpty() && !src.contains("youtube") && !src.contains("googleusercontent")) {
-                    loadExtractor(src, data, subtitleCallback, callback)
-                    handled = true
+                try {
+                    val src = iframe.attr("src")
+                    if (src.isNotEmpty() && !src.contains("youtube") && !src.contains("googleusercontent")) {
+                        loadExtractor(src, data, subtitleCallback, callback)
+                        handled = true
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
         }
@@ -217,47 +222,54 @@ class RebahinProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val baseOrigin = embedUrl.substringBefore("/embed").let {
-            if (it.startsWith("http")) it else "https://$it"
-        }
-
-        val html = app.get(
-            embedUrl,
-            headers = mapOf(
-                "User-Agent"      to userAgent,
-                "Accept"          to "text/html,application/xhtml+xml,*/*;q=0.8",
-                "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8",
-                "Referer"         to referer,
-            )
-        ).text
-
-        var found = false
-        Regex(""""file"\s*:\s*"(https?://[^"]+\.m3u8[^"]*)"""").findAll(html).forEach { m ->
-            found = true
-            callback.invoke(buildExtractorLink(m.groupValues[1], embedUrl, isM3u8 = true))
-        }
-
-        if (!found) {
-            Regex(""""file"\s*:\s*"(https?://[^"]+\.mp4[^"]*)"""").findAll(html).forEach { m ->
-                found = true
-                callback.invoke(buildExtractorLink(m.groupValues[1], embedUrl, isM3u8 = false))
+        try {
+            val baseOrigin = embedUrl.substringBefore("/embed").let {
+                if (it.startsWith("http")) it else "https://$it"
             }
-        }
 
-        if (!found) {
-            val apiPathMatch = Regex("""['"](/api/videos/[^'"]+/ping)['"]""").find(html)
-            if (apiPathMatch != null) {
-                found = processApiPing(
-                    baseOrigin,
-                    apiPathMatch.groupValues[1],
-                    html,
-                    embedUrl,
-                    callback
+            val html = app.get(
+                embedUrl,
+                headers = mapOf(
+                    "User-Agent"      to userAgent,
+                    "Accept"          to "text/html,application/xhtml+xml,*/*;q=0.8",
+                    "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8",
+                    "Referer"         to referer,
                 )
-            }
-        }
+            ).text
 
-        if (!found) {
+            var found = false
+            Regex(""""file"\s*:\s*"(https?://[^"]+\.m3u8[^"]*)"""").findAll(html).forEach { m ->
+                found = true
+                callback.invoke(buildExtractorLink(m.groupValues[1], embedUrl, isM3u8 = true))
+            }
+
+            if (!found) {
+                Regex(""""file"\s*:\s*"(https?://[^"]+\.mp4[^"]*)"""").findAll(html).forEach { m ->
+                    found = true
+                    callback.invoke(buildExtractorLink(m.groupValues[1], embedUrl, isM3u8 = false))
+                }
+            }
+
+            if (!found) {
+                val apiPathMatch = Regex("""['"](/api/videos/[^'"]+/ping)['"]""").find(html)
+                if (apiPathMatch != null) {
+                    found = processApiPing(
+                        baseOrigin,
+                        apiPathMatch.groupValues[1],
+                        html,
+                        embedUrl,
+                        callback
+                    )
+                }
+            }
+
+            // Jika semua di atas gagal, paksa lempar ke extractor CloudStream barangkali ada keajaiban
+            if (!found) {
+                loadExtractor(embedUrl, referer, subtitleCallback, callback)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            // Jika app.get() error (misal karena IP diblokir SSL), fallback ke extractor
             loadExtractor(embedUrl, referer, subtitleCallback, callback)
         }
     }
