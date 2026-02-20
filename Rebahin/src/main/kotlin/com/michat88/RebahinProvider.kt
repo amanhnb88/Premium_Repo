@@ -2,6 +2,7 @@ package com.michat88
 
 import android.util.Base64
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
@@ -80,7 +81,7 @@ class RebahinProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // 1. Ekstraksi Metadata di Halaman Detail
+        // 1. HALAMAN DETAIL (METADATA & TRAILER)
         val document = app.get(url).document
 
         var title = document.selectFirst("meta[property=og:title]")?.attr("content")
@@ -106,6 +107,7 @@ class RebahinProvider : MainAPI() {
         val ratingText = document.selectFirst("div.averagerate")?.text()
         val tagsList = document.select("span[itemprop=genre]").map { it.text() }
 
+        // MENGAMBIL TRAILER YOUTUBE
         var trailerUrl = document.selectFirst("iframe#iframe-trailer")?.attr("src")
         if (trailerUrl != null && trailerUrl.contains("youtube.com")) {
             if (trailerUrl.startsWith("//")) trailerUrl = "https:$trailerUrl"
@@ -115,7 +117,7 @@ class RebahinProvider : MainAPI() {
 
         val isTvSeries = url.contains("/series/") || document.selectFirst("div#list-eps") != null
 
-        // 2. Mencari Halaman Play Sesungguhnya
+        // 2. MENCARI URL HALAMAN 'PLAY' ATAU 'WATCH'
         var playUrl = document.selectFirst("#mv-info a.mvi-cover")?.attr("href")
             ?: document.selectFirst("a.bwac-btn, div.bwa-content a, a.play-btn")?.attr("href")
             
@@ -182,17 +184,18 @@ class RebahinProvider : MainAPI() {
                 this.year = year
                 this.score = Score.from(ratingText, 5)
                 this.tags = tagsList
-                this.trailerUrl = trailerUrl
+                // PERBAIKAN: Menggunakan fungsi addTrailer bawaan Cloudstream API
+                addTrailer(trailerUrl) 
             }
         } else {
-            // Kita jadikan 'playUrl' sebagai 'data' yang akan dikirim ke loadLinks
             return newMovieLoadResponse(title, url, TvType.Movie, playUrl) {
                 this.posterUrl = fixUrlNull(poster)
                 this.plot = plot
                 this.year = year
                 this.score = Score.from(ratingText, 5)
                 this.tags = tagsList
-                this.trailerUrl = trailerUrl
+                // PERBAIKAN: Menggunakan fungsi addTrailer bawaan Cloudstream API
+                addTrailer(trailerUrl) 
             }
         }
     }
@@ -204,7 +207,6 @@ class RebahinProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         
-        // Handle list URL (Untuk TV Series)
         if (data.startsWith("[")) {
             val urls = tryParseJson<List<String>>(data)
             urls?.forEach { url ->
@@ -213,7 +215,6 @@ class RebahinProvider : MainAPI() {
             return true
         }
 
-        // Handle halaman Play (Untuk Movie)
         val document = app.get(data).document
         val servers = document.select("div.server-wrapper div.server")
 
