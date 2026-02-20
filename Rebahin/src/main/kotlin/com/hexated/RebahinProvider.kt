@@ -23,11 +23,12 @@ class RebahinProvider : MainAPI() {
     override val hasDownloadSupport = true
     override val supportedTypes     = setOf(TvType.Movie, TvType.TvSeries)
 
+    // User-Agent yang sama persis dengan yang digunakan website
     private val userAgent =
         "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
 
-    // Data Class untuk parsing JSON API agar lebih aman (Perbaikan C)
+    // Data Class untuk parsing JSON API agar lebih aman
     data class ApiPingResponse(
         @JsonProperty("file") val file: String? = null,
         @JsonProperty("sources") val sources: List<ApiSource>? = null
@@ -40,7 +41,7 @@ class RebahinProvider : MainAPI() {
     )
 
     // ================================================================
-    // HALAMAN UTAMA & PENCARIAN
+    // HALAMAN UTAMA
     // ================================================================
     override val mainPage = mainPageOf(
         "$mainUrl/trending/"           to "Trending",
@@ -77,6 +78,9 @@ class RebahinProvider : MainAPI() {
         return newMovieSearchResponse(title, href, type) { this.posterUrl = poster }
     }
 
+    // ================================================================
+    // PENCARIAN
+    // ================================================================
     override suspend fun search(query: String): List<SearchResponse> {
         return app.get("$mainUrl/?s=$query", headers = mapOf("User-Agent" to userAgent))
             .document.select("article.item").mapNotNull { it.toSearchResult() }
@@ -115,13 +119,19 @@ class RebahinProvider : MainAPI() {
                     }
                 }
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-                this.posterUrl = poster; this.plot = plot
-                this.addScore(rating); this.tags = genres; this.year = year
+                this.posterUrl = poster
+                this.plot = plot
+                this.score = Score.from10(rating) 
+                this.tags = genres
+                this.year = year
             }
         } else {
             newMovieLoadResponse(title, url, TvType.Movie, "$url/play/?ep=1&sv=1") {
-                this.posterUrl = poster; this.plot = plot
-                this.addScore(rating); this.tags = genres; this.year = year
+                this.posterUrl = poster
+                this.plot = plot
+                this.score = Score.from10(rating)
+                this.tags = genres
+                this.year = year
             }
         }
     }
@@ -135,6 +145,8 @@ class RebahinProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+
+        // ── STEP 1: Akses halaman /play/ ──────────────────────────────
         val playDoc = app.get(
             data,
             headers = mapOf(
@@ -144,6 +156,7 @@ class RebahinProvider : MainAPI() {
             )
         ).document
 
+        // ── STEP 2: Temukan iframe /iembed/?source=BASE64 ─────────────
         val iembedSrc = playDoc
             .select("iframe[src*='/iembed/'], iframe[data-src*='/iembed/']")
             .firstOrNull()
@@ -153,6 +166,7 @@ class RebahinProvider : MainAPI() {
             val fullUrl = if (iembedSrc.startsWith("http")) iembedSrc else "$mainUrl$iembedSrc"
             processIembed(fullUrl, data, subtitleCallback, callback)
         } else {
+            // Fallback: iframe biasa
             playDoc.select("iframe[src], iframe[data-src]").forEach { iframe ->
                 val src = iframe.attr("src").ifEmpty { iframe.attr("data-src") }
                 if (src.isNotEmpty()) loadExtractor(src, data, subtitleCallback, callback)
@@ -162,6 +176,7 @@ class RebahinProvider : MainAPI() {
         return true
     }
 
+    // ── STEP 2→3: Decode base64 → akses embed server ─────────────────
     private suspend fun processIembed(
         iembedUrl: String,
         referer: String,
@@ -176,6 +191,7 @@ class RebahinProvider : MainAPI() {
         if (embedUrl != null) {
             processExternalEmbed(embedUrl, iembedUrl, subtitleCallback, callback)
         } else {
+            // Akses iembed langsung, cari iframe di dalamnya
             val doc = app.get(
                 iembedUrl,
                 headers = mapOf("User-Agent" to userAgent, "Referer" to referer)
@@ -186,6 +202,7 @@ class RebahinProvider : MainAPI() {
         }
     }
 
+    // ── STEP 3→4: Parsing embed server ───────────────────────────────
     private suspend fun processExternalEmbed(
         embedUrl: String,
         referer: String,
@@ -237,7 +254,7 @@ class RebahinProvider : MainAPI() {
         }
     }
 
-    // ── PERBAIKAN C: Parsing JSON yang Aman & Request Body OkHttp ──────
+    // ── STEP 4: POST ke /api/videos/.../ping ─────────────────────────
     private suspend fun processApiPing(
         baseOrigin: String,
         apiPath: String,
@@ -281,10 +298,9 @@ class RebahinProvider : MainAPI() {
                 } else url
             }
 
-            // Gunakan AppUtils.tryParseJson untuk menjadikannya Objek
+            // Menggunakan fungsi tryParseJson agar lebih aman
             val apiData = tryParseJson<ApiPingResponse>(responseText)
 
-            // Cek di dalam array 'sources'
             apiData?.sources?.forEach { source ->
                 source.file?.let { fileUrl ->
                     found = true
@@ -294,7 +310,6 @@ class RebahinProvider : MainAPI() {
                 }
             }
 
-            // Cek jika API merespons langsung dengan object 'file'
             if (!found && apiData?.file != null) {
                 found = true
                 val finalUrl = appendToken(apiData.file)
@@ -302,7 +317,7 @@ class RebahinProvider : MainAPI() {
                 callback.invoke(buildExtractorLink(finalUrl, embedUrl, isM3u8))
             }
 
-            // Fallback kembali ke Regex jika struktur JSON ternyata benar-benar berbeda
+            // Fallback Regex
             if (!found) {
                 Regex(""""(https?://[^"]+\.m3u8[^"]*)"""").findAll(responseText).forEach { m ->
                     found = true
@@ -321,7 +336,7 @@ class RebahinProvider : MainAPI() {
         }
     }
 
-    // ── PERBAIKAN B: Menarik IP Publik Pengguna ──────────────────────────
+    // ── HELPER: Menarik IP Publik Pengguna & Membuat Token CDN ───────
     private suspend fun getClientIp(): String? {
         return try {
             app.get("https://api.ipify.org").text.trim()
@@ -336,7 +351,7 @@ class RebahinProvider : MainAPI() {
         return Base64.getEncoder().encodeToString(raw.toByteArray())
     }
 
-    // ── PERBAIKAN A: Memakai Builder newExtractorLink yang Aman ──────────
+    // ── HELPER: Buat ExtractorLink dengan builder terbaru ────────────
     private suspend fun buildExtractorLink(
         url: String,
         referer: String,
