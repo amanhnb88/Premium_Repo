@@ -53,10 +53,15 @@ class RebahinProvider : MainAPI() {
         }
     }
 
+    // PERBAIKAN POSTER ADA DI FUNGSI INI
     private fun Element.toSearchResult(): SearchResponse? {
         val href = this.selectFirst("a")?.attr("href") ?: return null
         val title = this.selectFirst("a")?.attr("title") ?: this.selectFirst("span.mli-info h2")?.text() ?: return null
-        val posterUrl = this.selectFirst("img")?.attr("src") ?: this.selectFirst("img")?.attr("data-original")
+        
+        // Logika Poster Pintar: Prioritaskan data-original, kalau kosong baru ambil src
+        val imgNode = this.selectFirst("img")
+        val posterUrl = imgNode?.attr("data-original")?.takeIf { it.isNotBlank() } ?: imgNode?.attr("src")
+        
         val quality = this.selectFirst("span.mli-quality")?.text()
         
         val isTvSeries = href.contains("/series/") || href.contains("/tv/") || href.contains("/episode/")
