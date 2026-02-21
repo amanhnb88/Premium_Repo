@@ -177,7 +177,7 @@ class RebahinProvider : MainAPI() {
 
                     if (embedUrl != null) {
                         handled = true
-                        // Semua server sekarang diproses dengan WebView agar aman
+                        // Semua server sekarang diproses dengan WebView agar aman dari blokir
                         processExternalEmbed(embedUrl, data, subtitleCallback, callback)
                     }
                 }
@@ -210,14 +210,21 @@ class RebahinProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // WEBVIEW MAGIC: Intercept semua domain video yang kita temukan tadi
-            // Ini akan otomatis menangani Dawn/Flow Ping dan Service Worker Abyss
+            // WEBVIEW MAGIC: Intercept semua domain video yang kita temukan
             val interceptor = WebViewResolver(
                 Regex(".*daisy\\.groovy\\.monster.*|.*\\.sssrr\\.org.*|.*\\.m3u8.*|.*\\.mp4.*|.*abysscdn\\.com.*")
             )
 
-            // Buka halaman dan biarkan JavaScript bekerja selama 30 detik
-            val response = app.get(embedUrl, referer = referer, interceptor = interceptor, timeout = 30)
+            // Membuka URL dengan WebView menggunakan struktur mapOf untuk headers
+            val response = app.get(
+                url = embedUrl,
+                headers = mapOf(
+                    "User-Agent" to userAgent,
+                    "Referer" to referer
+                ),
+                interceptor = interceptor,
+                timeout = 30L
+            )
             val finalUrl = response.url
 
             // Jika link video asli ditemukan melalui interceptor
@@ -241,7 +248,7 @@ class RebahinProvider : MainAPI() {
                     }
                 )
             } else {
-                // Jika WebView gagal menangkap link dinamis, coba ekstraktor standar
+                // Jika WebView gagal menangkap link dinamis, coba ekstraktor standar bawaan
                 loadExtractor(embedUrl, referer, subtitleCallback, callback)
             }
         } catch (e: Exception) {
@@ -250,7 +257,23 @@ class RebahinProvider : MainAPI() {
         }
     }
 
-    // Fungsi helper tambahan untuk kualitas link standar
+    // ================================================================
+    // FUNGSI HELPER BAWAAN (TIDAK DIHAPUS)
+    // ================================================================
+    private suspend fun getClientIp(): String? {
+        return try {
+            app.get("https://api.ipify.org").text.trim()
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private suspend fun generateCdnToken(ua: String = userAgent): String? {
+        val clientIp = getClientIp() ?: return null
+        val raw = "$clientIp~~$ua"
+        return Base64.getEncoder().encodeToString(raw.toByteArray())
+    }
+
     private suspend fun buildExtractorLink(
         url: String,
         referer: String,
@@ -267,7 +290,10 @@ class RebahinProvider : MainAPI() {
             this.quality = quality
             this.headers = mapOf(
                 "User-Agent" to userAgent,
-                "Referer"    to referer
+                "Referer"    to referer,
+                "Origin"     to referer.substringBefore("/embed").let {
+                    if (it.startsWith("http")) it else "https://$it"
+                }
             )
         }
     }
