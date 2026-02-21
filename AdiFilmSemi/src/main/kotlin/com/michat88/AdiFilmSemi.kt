@@ -29,7 +29,6 @@ import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import kotlin.math.roundToInt
 
 open class AdiFilmSemi : TmdbProvider() {
     override var name = "AdiFilmSemi"
@@ -75,23 +74,18 @@ open class AdiFilmSemi : TmdbProvider() {
         const val Player4uApi = "https://player4u.xyz"
         const val RiveStreamAPI = "https://rivestream.org"
 
-        fun getType(t: String?): TvType {
-            return when (t) {
-                "movie" -> TvType.Movie
-                else -> TvType.TvSeries
-            }
+        fun getType(t: String?): TvType = when (t) {
+            "movie" -> TvType.Movie
+            else -> TvType.TvSeries
         }
 
-        fun getStatus(t: String?): ShowStatus {
-            return when (t) {
-                "Returning Series" -> ShowStatus.Ongoing
-                else -> ShowStatus.Completed
-            }
+        fun getStatus(t: String?): ShowStatus = when (t) {
+            "Returning Series" -> ShowStatus.Ongoing
+            else -> ShowStatus.Completed
         }
-
     }
 
-            // Main Page Final: Indo Viral 18+ Masuk, No Spanish, No Comedy/Anime
+    // Main Page Final: Indo Viral 18+ Masuk, No Spanish, No Comedy/Anime
     override val mainPage = mainPageOf(
         // 1. Vivamax Movie (Tagalog - Hot New)
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_original_language=tl&with_genres=10749,18&without_genres=16,35,10751&primary_release_date.gte=2016-01-01&sort_by=release_date.desc&vote_count.gte=2" to "Vivamax Movie (New)",
@@ -139,9 +133,6 @@ open class AdiFilmSemi : TmdbProvider() {
         // 15. Popular Romance This Year
         "$tmdbAPI/discover/movie?api_key=$apiKey&with_genres=10749&without_genres=16,35,10751&primary_release_date.gte=2023-01-01&sort_by=popularity.desc" to "Popular Romance (Hot)"
     )
-
-
-
 
     private fun getImageUrl(link: String?): String? {
         if (link == null) return null
@@ -223,9 +214,9 @@ open class AdiFilmSemi : TmdbProvider() {
         val genres = res.genres?.mapNotNull { it.name }
 
         val isCartoon = genres?.contains("Animation") ?: false
-        val isAnime = isCartoon && (res.original_language == "zh" || res.original_language == "ja")
-        val isAsian = !isAnime && (res.original_language == "zh" || res.original_language == "ko")
-        val isBollywood = res.production_countries?.any { it.name == "India" } ?: false
+        val isAnime = isCartoon && (res.originalLanguage == "zh" || res.originalLanguage == "ja")
+        val isAsian = !isAnime && (res.originalLanguage == "zh" || res.originalLanguage == "ko")
+        val isBollywood = res.productionCountries?.any { it.name == "India" } ?: false
 
         val keywords = res.keywords?.results?.mapNotNull { it.name }.orEmpty()
             .ifEmpty { res.keywords?.keywords?.mapNotNull { it.name } }
@@ -249,15 +240,15 @@ open class AdiFilmSemi : TmdbProvider() {
             ?.take(1)
 
         return if (type == TvType.TvSeries) {
-            val lastSeason = res.last_episode_to_air?.season_number
+            val lastSeason = res.lastEpisodeToAir?.seasonNumber
             val episodes = res.seasons?.mapNotNull { season ->
                 app.get("$tmdbAPI/${data.type}/${data.id}/season/${season.seasonNumber}?api_key=$apiKey")
                     .parsedSafe<MediaDetailEpisodes>()?.episodes?.map { eps ->
                         newEpisode(
                             data = LinkData(
                                 data.id,
-                                res.external_ids?.imdb_id,
-                                res.external_ids?.tvdb_id,
+                                res.externalIds?.imdbId,
+                                res.externalIds?.tvdbId,
                                 data.type,
                                 eps.seasonNumber,
                                 eps.episodeNumber,
@@ -268,7 +259,7 @@ open class AdiFilmSemi : TmdbProvider() {
                                 airedYear = year,
                                 lastSeason = lastSeason,
                                 epsTitle = eps.name,
-                                jpTitle = res.alternative_titles?.results?.find { it.iso_3166_1 == "JP" }?.title,
+                                jpTitle = res.alternativeTitles?.results?.find { it.iso31661 == "JP" }?.title,
                                 date = season.airDate,
                                 airedDate = res.releaseDate
                                     ?: res.firstAirDate,
@@ -300,14 +291,14 @@ open class AdiFilmSemi : TmdbProvider() {
                 this.year = year
                 this.plot = res.overview
                 this.tags = keywords.takeIf { !it.isNullOrEmpty() } ?: genres
-                this.score = Score.from10(res.vote_average?.toString())
+                this.score = Score.from10(res.voteAverage?.toString())
                 this.showStatus = getStatus(res.status)
                 this.recommendations = recommendations
                 this.actors = actors
                 this.contentRating = fetchContentRating(data.id, "US")
                 addTrailer(trailer)
                 addTMDbId(data.id.toString())
-                addImdbId(res.external_ids?.imdb_id)
+                addImdbId(res.externalIds?.imdbId)
             }
         } else {
             newMovieLoadResponse(
@@ -316,14 +307,14 @@ open class AdiFilmSemi : TmdbProvider() {
                 TvType.Movie,
                 LinkData(
                     data.id,
-                    res.external_ids?.imdb_id,
-                    res.external_ids?.tvdb_id,
+                    res.externalIds?.imdbId,
+                    res.externalIds?.tvdbId,
                     data.type,
                     title = title,
                     year = year,
                     orgTitle = orgTitle,
                     isAnime = isAnime,
-                    jpTitle = res.alternative_titles?.results?.find { it.iso_3166_1 == "JP" }?.title,
+                    jpTitle = res.alternativeTitles?.results?.find { it.iso31661 == "JP" }?.title,
                     airedDate = res.releaseDate
                         ?: res.firstAirDate,
                     isAsian = isAsian,
@@ -337,13 +328,13 @@ open class AdiFilmSemi : TmdbProvider() {
                 this.plot = res.overview
                 this.duration = res.runtime
                 this.tags = keywords.takeIf { !it.isNullOrEmpty() } ?: genres
-                this.score = Score.from10(res.vote_average?.toString())
+                this.score = Score.from10(res.voteAverage?.toString())
                 this.recommendations = recommendations
                 this.actors = actors
                 this.contentRating = fetchContentRating(data.id, "US")
                 addTrailer(trailer)
                 addTMDbId(data.id.toString())
-                addImdbId(res.external_ids?.imdb_id)
+                addImdbId(res.externalIds?.imdbId)
             }
         }
     }
@@ -590,7 +581,7 @@ open class AdiFilmSemi : TmdbProvider() {
     )
 
     data class AltTitles(
-        @JsonProperty("iso_3166_1") val iso_3166_1: String? = null,
+        @JsonProperty("iso_3166_1") val iso31661: String? = null,
         @JsonProperty("title") val title: String? = null,
         @JsonProperty("type") val type: String? = null,
     )
@@ -600,8 +591,8 @@ open class AdiFilmSemi : TmdbProvider() {
     )
 
     data class ExternalIds(
-        @JsonProperty("imdb_id") val imdb_id: String? = null,
-        @JsonProperty("tvdb_id") val tvdb_id: Int? = null,
+        @JsonProperty("imdb_id") val imdbId: String? = null,
+        @JsonProperty("tvdb_id") val tvdbId: Int? = null,
     )
 
     data class Credits(
@@ -613,8 +604,8 @@ open class AdiFilmSemi : TmdbProvider() {
     )
 
     data class LastEpisodeToAir(
-        @JsonProperty("episode_number") val episode_number: Int? = null,
-        @JsonProperty("season_number") val season_number: Int? = null,
+        @JsonProperty("episode_number") val episodeNumber: Int? = null,
+        @JsonProperty("season_number") val seasonNumber: Int? = null,
     )
 
     data class ProductionCountries(
@@ -634,19 +625,18 @@ open class AdiFilmSemi : TmdbProvider() {
         @JsonProperty("first_air_date") val firstAirDate: String? = null,
         @JsonProperty("overview") val overview: String? = null,
         @JsonProperty("runtime") val runtime: Int? = null,
-        @JsonProperty("vote_average") val vote_average: Any? = null,
-        @JsonProperty("original_language") val original_language: String? = null,
+        @JsonProperty("vote_average") val voteAverage: Any? = null,
+        @JsonProperty("original_language") val originalLanguage: String? = null,
         @JsonProperty("status") val status: String? = null,
         @JsonProperty("genres") val genres: ArrayList<Genres>? = arrayListOf(),
         @JsonProperty("keywords") val keywords: KeywordResults? = null,
-        @JsonProperty("last_episode_to_air") val last_episode_to_air: LastEpisodeToAir? = null,
+        @JsonProperty("last_episode_to_air") val lastEpisodeToAir: LastEpisodeToAir? = null,
         @JsonProperty("seasons") val seasons: ArrayList<Seasons>? = arrayListOf(),
         @JsonProperty("videos") val videos: ResultsTrailer? = null,
-        @JsonProperty("external_ids") val external_ids: ExternalIds? = null,
+        @JsonProperty("external_ids") val externalIds: ExternalIds? = null,
         @JsonProperty("credits") val credits: Credits? = null,
         @JsonProperty("recommendations") val recommendations: ResultsRecommendations? = null,
-        @JsonProperty("alternative_titles") val alternative_titles: ResultsAltTitles? = null,
-        @JsonProperty("production_countries") val production_countries: ArrayList<ProductionCountries>? = arrayListOf(),
+        @JsonProperty("alternative_titles") val alternativeTitles: ResultsAltTitles? = null,
+        @JsonProperty("production_countries") val productionCountries: ArrayList<ProductionCountries>? = arrayListOf(),
     )
-
 }
