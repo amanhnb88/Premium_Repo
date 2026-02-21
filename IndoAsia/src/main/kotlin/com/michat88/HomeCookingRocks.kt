@@ -84,10 +84,9 @@ class HomeCookingRocks : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // 1. Ambil raw HTML sebagai String (Bypass Jsoup document agar jauh lebih ringan)
+        // Bypass Jsoup document, ambil string murni agar ringan
         val html = app.get(data).text
 
-        // 2. Parsing dengan Regex: Cari blok tabs dan ekstrak URL di dalamnya
         val tabsBlockMatch = Regex("""class=["'][^"']*muvipro-player-tabs[^"']*["'][^>]*>(.*?)</ul>""", RegexOption.DOT_MATCHES_ALL).find(html)
         
         val rawServerUrls = if (tabsBlockMatch != null) {
@@ -96,24 +95,20 @@ class HomeCookingRocks : MainAPI() {
                 .distinct()
                 .toList()
         } else {
-            listOf(data) // Fallback jika tidak ada tabs (hanya 1 server)
+            listOf(data)
         }
 
-        // 3. Prioritization: Urutkan URL. URL halaman saat ini (data) dikerjakan pertama (index 0)
-        // karena kita sudah punya text HTML-nya (variabel html), menghemat 1x request network!
+        // Prioritaskan link dari halaman ini
         val sortedUrls = rawServerUrls.sortedBy { url ->
             if (url == data) 0 else 1
         }
 
-        // 4. Structured Concurrency: Jalankan semua proses ekstraksi secara paralel!
+        // Proses Paralel Asinkronus Kecepatan Tinggi
         coroutineScope {
             sortedUrls.forEach { serverUrl ->
                 launch(Dispatchers.IO) {
                     try {
-                        // Jika URL adalah halaman saat ini, pakai 'html' yang sudah ada. Jika beda, get HTML baru.
                         val serverHtml = if (serverUrl == data) html else app.get(serverUrl).text
-                        
-                        // Ekstrak iframe SRC menggunakan Regex murni
                         val iframeMatch = Regex("""class=["'][^"']*gmr-embed-responsive[^"']*["'][^>]*>.*?<iframe[^>]+src=["']([^"']+)["']""", RegexOption.DOT_MATCHES_ALL).find(serverHtml)
                         val iframeSrc = iframeMatch?.groupValues?.get(1)
 
@@ -154,14 +149,13 @@ class HomeCookingRocks : MainAPI() {
                                 }
                             } 
                             // ==========================================
-                            // SERVER 2: 4MePlayer (Bypass Enkripsi AES)
+                            // SERVER 2: 4MePlayer (Bypass AES)
                             // ==========================================
                             else if (iframeSrc.contains("4meplayer")) {
                                 val videoId = iframeSrc.substringAfterLast("#")
                                 if (videoId.isNotEmpty() && videoId != iframeSrc) {
                                     val host = java.net.URI(iframeSrc).host
                                     
-                                    // Skenario aman: Coba 2 endpoint andalan mereka
                                     val endpoints = listOf(
                                         "https://$host/api/v1/video?id=$videoId",
                                         "https://$host/api/v1/info?id=$videoId"
@@ -169,15 +163,12 @@ class HomeCookingRocks : MainAPI() {
                                     
                                     var foundM3u8 = false
                                     for (apiUrl in endpoints) {
-                                        if (foundM3u8) break // Berhenti jika M3U8 sudah ketemu
+                                        if (foundM3u8) break 
                                         
                                         try {
                                             val hexResponse = app.get(apiUrl, referer = iframeSrc).text.trim()
                                             
-                                            // Pastikan response adalah hex murni sebelum didekripsi
                                             if (hexResponse.isNotEmpty() && hexResponse.matches(Regex("^[0-9a-fA-F]+$"))) {
-                                                
-                                                // Kunci Rahasia dan IV dari hasil Reverse Engineering
                                                 val secretKey = "kiemtienmua911ca".toByteArray(Charsets.UTF_8)
                                                 val ivBytes = ByteArray(16)
                                                 for (i in 0..8) ivBytes[i] = i.toByte() 
@@ -189,12 +180,10 @@ class HomeCookingRocks : MainAPI() {
                                                 
                                                 cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, ivParameterSpec)
                                                 
-                                                // Konversi string Hex ke ByteArray
                                                 val decodedHex = hexResponse.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
                                                 val decryptedBytes = cipher.doFinal(decodedHex)
                                                 val decryptedText = String(decryptedBytes, Charsets.UTF_8)
                                                 
-                                                // Curi link M3U8 via Regex
                                                 val m3u8Regex = """"([^"]+\.m3u8[^"]*)"""".toRegex()
                                                 val match = m3u8Regex.find(decryptedText)
                                                 
@@ -219,23 +208,28 @@ class HomeCookingRocks : MainAPI() {
                                                 }
                                             }
                                         } catch (e: Exception) {
-                                            // Jika gagal dekripsi / error 404, loop akan lanjut ke endpoint berikutnya
+                                            // Abaikan, maju ke endpoint selanjutnya
                                         }
                                     }
                                 }
                             }
                             // ==========================================
-                            // SERVER 3: ImaxStreams
+                            // SERVER 3/4: ImaxStreams (Bypass Packed JS)
                             // ==========================================
                             else if (iframeSrc.contains("imaxstreams")) {
-                                val response = app.get(
-                                    url = iframeSrc,
-                                    referer = data,
-                                    interceptor = com.lagradost.cloudstream3.network.WebViewResolver(Regex("""\.m3u8"""))
-                                )
-                                val m3u8Url = response.url
+                                // 1. Tembak Iframe
+                                val iframeHtml = app.get(iframeSrc, referer = data).text
                                 
-                                if (m3u8Url.contains(".m3u8")) {
+                                // 2. Gunakan fungsi AppUtils.getAndUnpack untuk membongkar script
+                                val unpackedText = AppUtils.getAndUnpack(iframeHtml)
+                                
+                                // 3. Tangkap link m3u8 dengan Regex
+                                val m3u8Regex = """"([^"]+\.m3u8[^"]*)"""".toRegex()
+                                val match = m3u8Regex.find(unpackedText) ?: m3u8Regex.find(iframeHtml)
+                                
+                                if (match != null) {
+                                    val m3u8Url = match.groupValues[1].replace("\\/", "/")
+                                    
                                     callback.invoke(
                                         newExtractorLink(
                                             source = name,
@@ -257,14 +251,11 @@ class HomeCookingRocks : MainAPI() {
                             }
                         }
                     } catch (e: Exception) {
-                        // Jika satu tab/server gagal (misal server mati), biarkan coroutine lain tetap berjalan
                         e.printStackTrace()
                     }
                 }
             }
         }
-        // Semua coroutine (launch) ditunggu sampai selesai di dalam coroutineScope, 
-        // sehingga fungsi tidak akan return true sebelum semua server dicek.
         return true
     }
 }
