@@ -177,7 +177,6 @@ class RebahinProvider : MainAPI() {
 
                     if (embedUrl != null) {
                         handled = true
-                        // Semua server sekarang diproses dengan WebView agar aman dari blokir
                         processExternalEmbed(embedUrl, data, subtitleCallback, callback)
                     }
                 }
@@ -210,36 +209,34 @@ class RebahinProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // WEBVIEW MAGIC: Intercept semua domain video yang kita temukan
             val interceptor = WebViewResolver(
                 Regex(".*daisy\\.groovy\\.monster.*|.*\\.sssrr\\.org.*|.*\\.m3u8.*|.*\\.mp4.*|.*abysscdn\\.com.*")
             )
 
-            // Membuka URL dengan WebView menggunakan struktur mapOf untuk headers
             val response = app.get(
-                url = embedUrl,
+                embedUrl,
                 headers = mapOf(
                     "User-Agent" to userAgent,
                     "Referer" to referer
                 ),
                 interceptor = interceptor,
-                timeout = 30L
+                timeout = 30
             )
             val finalUrl = response.url
 
-            // Jika link video asli ditemukan melalui interceptor
             if (finalUrl.contains("daisy.groovy.monster") || finalUrl.contains("sssrr.org") || finalUrl.contains(".m3u8")) {
                 val isJuicy = finalUrl.contains("daisy")
                 val isAbyss = finalUrl.contains("sssrr")
 
                 callback.invoke(
+                    // PERBAIKAN: Parameter referer dipindahkan dari argumen utama ke dalam blok lambda
                     newExtractorLink(
                         source  = name,
                         name    = if (isJuicy) "Server Juicy" else if (isAbyss) "Server Abyss" else "Premium Server",
                         url     = finalUrl,
-                        referer = embedUrl,
                         type    = if (finalUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                     ) {
+                        this.referer = embedUrl // <-- DI SINI TEMPAT YANG BENAR
                         this.headers = mapOf(
                             "User-Agent" to userAgent,
                             "Referer"    to embedUrl,
@@ -248,7 +245,6 @@ class RebahinProvider : MainAPI() {
                     }
                 )
             } else {
-                // Jika WebView gagal menangkap link dinamis, coba ekstraktor standar bawaan
                 loadExtractor(embedUrl, referer, subtitleCallback, callback)
             }
         } catch (e: Exception) {
