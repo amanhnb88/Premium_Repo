@@ -11,6 +11,7 @@ class FourMePlayerExtractor : ExtractorApi() {
     override val mainUrl = "https://ichinime.4meplayer.pro"
     override val requiresReferer = true
 
+    @Suppress("DEPRECATION") // Mantra agar tidak error di sistem build
     override suspend fun getUrl(
         url: String,
         referer: String?,
@@ -18,13 +19,11 @@ class FourMePlayerExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            // Ambil ID video dari URL iframe
             val iframeId = Regex("""(?:id=|/v/|/e/)([\w-]+)""").find(url)?.groupValues?.get(1) ?: return
             val host = java.net.URI(url).host
             val refererWeb = referer?.let { java.net.URI(it).host } ?: "homecookingrocks.com"
             val apiUrl = "https://$host/api/v1/video?id=$iframeId&w=360&h=800&r=$refererWeb"
 
-            // MENGHINDARI BLOKIR CLOUDFLARE: Wajib pakai User-Agent
             val responseText = app.get(
                 url = apiUrl,
                 headers = mapOf(
@@ -35,16 +34,12 @@ class FourMePlayerExtractor : ExtractorApi() {
                 )
             ).text.trim().replace("\"", "")
 
-            // PENGAMAN: Pastikan responnya Hexadecimal (Bukan HTML blokir)
             if (responseText.isEmpty() || !responseText.matches(Regex("^[0-9a-fA-F]+$"))) {
                 return 
             }
 
-            // GOD MODE ENCRYPTION BONGKAR SANDI
             val dataBytes = responseText.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
             val keySpec = SecretKeySpec("kiemtienmua911ca".toByteArray(), "AES")
-            
-            // IV statis bawaan server 4MePlayer
             val ivBytes = byteArrayOf(
                 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x00,
                 0x6f, 0x00, 0x6f, 0x73, 0x20, 0x1e
@@ -55,8 +50,6 @@ class FourMePlayerExtractor : ExtractorApi() {
             cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
             
             val decryptedJson = String(cipher.doFinal())
-            
-            // Bersihkan JSON jika ada karakter sampah di depannya
             val cleanJson = decryptedJson.substringAfter("{", "").let { if (it.isNotEmpty()) "{$it" else decryptedJson }
             
             val sourceMatch = Regex(""""source"\s*:\s*"([^"]+)"""").find(cleanJson)?.groupValues?.get(1)?.replace("\\/", "/")
@@ -70,7 +63,7 @@ class FourMePlayerExtractor : ExtractorApi() {
                         url = sourceMatch,
                         referer = url,
                         quality = Qualities.Unknown.value,
-                        type = ExtractorLinkType.M3U8
+                        isM3u8 = true
                     )
                 )
             }
@@ -83,7 +76,7 @@ class FourMePlayerExtractor : ExtractorApi() {
                         url = fullTiktokUrl,
                         referer = url,
                         quality = Qualities.Unknown.value,
-                        type = ExtractorLinkType.M3U8
+                        isM3u8 = true
                     )
                 )
             }
