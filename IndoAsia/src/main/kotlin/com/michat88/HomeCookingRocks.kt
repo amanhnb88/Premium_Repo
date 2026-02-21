@@ -84,7 +84,7 @@ class HomeCookingRocks : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Bypass Jsoup document, ambil string murni agar ringan
+        // Bypass Jsoup document, ambil string murni agar super ringan
         val html = app.get(data).text
 
         val tabsBlockMatch = Regex("""class=["'][^"']*muvipro-player-tabs[^"']*["'][^>]*>(.*?)</ul>""", RegexOption.DOT_MATCHES_ALL).find(html)
@@ -98,7 +98,7 @@ class HomeCookingRocks : MainAPI() {
             listOf(data)
         }
 
-        // Prioritaskan link dari halaman ini
+        // Prioritaskan link dari halaman ini di urutan pertama
         val sortedUrls = rawServerUrls.sortedBy { url ->
             if (url == data) 0 else 1
         }
@@ -217,13 +217,13 @@ class HomeCookingRocks : MainAPI() {
                             // SERVER 3/4: ImaxStreams (Bypass Packed JS)
                             // ==========================================
                             else if (iframeSrc.contains("imaxstreams")) {
-                                // 1. Tembak Iframe
+                                // Tembak iframe untuk mengambil html murni
                                 val iframeHtml = app.get(iframeSrc, referer = data).text
                                 
-                                // 2. Gunakan fungsi AppUtils.getAndUnpack untuk membongkar script
-                                val unpackedText = AppUtils.getAndUnpack(iframeHtml)
+                                // Bongkar JS packer menggunakan fungsi bawaan utils CloudStream
+                                val unpackedText = getAndUnpack(iframeHtml)
                                 
-                                // 3. Tangkap link m3u8 dengan Regex
+                                // Tangkap M3U8 dengan Regex (prioritaskan teks yang diunpack)
                                 val m3u8Regex = """"([^"]+\.m3u8[^"]*)"""".toRegex()
                                 val match = m3u8Regex.find(unpackedText) ?: m3u8Regex.find(iframeHtml)
                                 
