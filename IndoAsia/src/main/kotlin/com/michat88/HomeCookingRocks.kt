@@ -85,7 +85,6 @@ class HomeCookingRocks : MainAPI() {
         val servers = document.select(".muvipro-player-tabs li a")
 
         for (server in servers) {
-            // FIX: Tambahkan try-catch agar kalau server error, aplikasi nggak force close
             try {
                 val serverUrl = fixUrl(server.attr("href"))
                 val serverDoc = if (serverUrl == data) document else app.get(serverUrl).document
@@ -119,7 +118,6 @@ class HomeCookingRocks : MainAPI() {
                                 ) {
                                     this.referer = iframeSrc
                                     this.quality = Qualities.Unknown.value
-                                    // FIX: Tambahkan Headers agar tidak kena M3U8 Error
                                     this.headers = mapOf(
                                         "Origin" to "https://$host",
                                         "Accept" to "*/*"
@@ -135,55 +133,65 @@ class HomeCookingRocks : MainAPI() {
                         val videoId = iframeSrc.substringAfterLast("#")
                         if (videoId.isNotEmpty() && videoId != iframeSrc) {
                             val host = java.net.URI(iframeSrc).host
-                            // Request ke endpoint info untuk membongkar m3u8
-                            val apiUrl = "https://$host/api/v1/info?id=$videoId"
                             
-                            val hexResponse = app.get(apiUrl, referer = iframeSrc).text.trim()
+                            // FIX: Kita coba 2 endpoint andalan mereka agar tidak kena jebakan 404 Error
+                            val endpoints = listOf(
+                                "https://$host/api/v1/video?id=$videoId",
+                                "https://$host/api/v1/info?id=$videoId"
+                            )
                             
-                            if (hexResponse.isNotEmpty() && hexResponse.matches(Regex("^[0-9a-fA-F]+$"))) {
-                                // Menyiapkan Kunci dan IV dari hasil Brute-force
-                                val secretKey = "kiemtienmua911ca".toByteArray(Charsets.UTF_8)
-                                val ivBytes = ByteArray(16)
-                                for (i in 0..8) ivBytes[i] = i.toByte() // 0-8 statis berdasarkan index
-                                for (i in 9..15) ivBytes[i] = 32.toByte() // Sisa 7 byte ASCII Spasi
+                            var foundM3u8 = false
+
+                            for (apiUrl in endpoints) {
+                                if (foundM3u8) break // Berhenti jika m3u8 sudah ketemu di salah satu endpoint
                                 
-                                val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-                                val secretKeySpec = SecretKeySpec(secretKey, "AES")
-                                val ivParameterSpec = IvParameterSpec(ivBytes)
-                                
-                                cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, ivParameterSpec)
-                                
-                                // Ubah Hex String -> ByteArray
-                                val decodedHex = hexResponse.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-                                
-                                // Buka gembok server!
-                                val decryptedBytes = cipher.doFinal(decodedHex)
-                                val decryptedText = String(decryptedBytes, Charsets.UTF_8)
-                                
-                                // Curi link m3u8 menggunakan Regex
-                                val m3u8Regex = """"([^"]+\.m3u8[^"]*)"""".toRegex()
-                                val match = m3u8Regex.find(decryptedText)
-                                
-                                if (match != null) {
-                                    // Bersihkan backslash pelindung json (misal: \/)
-                                    var m3u8Url = match.groupValues[1].replace("\\/", "/")
+                                // Nested try-catch untuk melindungi aplikasi jika salah satu endpoint gagal diakses
+                                try {
+                                    val hexResponse = app.get(apiUrl, referer = iframeSrc).text.trim()
                                     
-                                    // Jika link tidak lengkap, tambahkan host-nya
-                                    if (m3u8Url.startsWith("/")) {
-                                        m3u8Url = "https://$host$m3u8Url"
-                                    }
-                                    
-                                    callback.invoke(
-                                        newExtractorLink(
-                                            source = name,
-                                            name = "Server 2 (4MePlayer)",
-                                            url = m3u8Url,
-                                            type = ExtractorLinkType.M3U8
-                                        ) {
-                                            this.referer = iframeSrc
-                                            this.quality = Qualities.Unknown.value
+                                    if (hexResponse.isNotEmpty() && hexResponse.matches(Regex("^[0-9a-fA-F]+$"))) {
+                                        val secretKey = "kiemtienmua911ca".toByteArray(Charsets.UTF_8)
+                                        val ivBytes = ByteArray(16)
+                                        for (i in 0..8) ivBytes[i] = i.toByte() 
+                                        for (i in 9..15) ivBytes[i] = 32.toByte() 
+                                        
+                                        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+                                        val secretKeySpec = SecretKeySpec(secretKey, "AES")
+                                        val ivParameterSpec = IvParameterSpec(ivBytes)
+                                        
+                                        cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, ivParameterSpec)
+                                        
+                                        val decodedHex = hexResponse.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+                                        
+                                        val decryptedBytes = cipher.doFinal(decodedHex)
+                                        val decryptedText = String(decryptedBytes, Charsets.UTF_8)
+                                        
+                                        val m3u8Regex = """"([^"]+\.m3u8[^"]*)"""".toRegex()
+                                        val match = m3u8Regex.find(decryptedText)
+                                        
+                                        if (match != null) {
+                                            var m3u8Url = match.groupValues[1].replace("\\/", "/")
+                                            if (m3u8Url.startsWith("/")) {
+                                                m3u8Url = "https://$host$m3u8Url"
+                                            }
+                                            
+                                            callback.invoke(
+                                                newExtractorLink(
+                                                    source = name,
+                                                    name = "Server 2 (4MePlayer)",
+                                                    url = m3u8Url,
+                                                    type = ExtractorLinkType.M3U8
+                                                ) {
+                                                    this.referer = iframeSrc
+                                                    this.quality = Qualities.Unknown.value
+                                                }
+                                            )
+                                            foundM3u8 = true
                                         }
-                                    )
+                                    }
+                                } catch (e: Exception) {
+                                    // Abaikan secara diam-diam jika endpoint ini gagal / bukan M3U8,
+                                    // program akan otomatis berputar mengecek endpoint sebelahnya.
                                 }
                             }
                         }
@@ -192,8 +200,6 @@ class HomeCookingRocks : MainAPI() {
                     // SERVER 3: ImaxStreams
                     // ==========================================
                     else if (iframeSrc.contains("imaxstreams")) {
-                        // SENJATA RAHASIA CLOUDSTREAM: WebViewResolver!
-                        // ImaxStreams tetap dipisahkan agar pakai metode ini
                         val response = app.get(
                             url = iframeSrc,
                             referer = data,
@@ -223,7 +229,6 @@ class HomeCookingRocks : MainAPI() {
                     }
                 }
             } catch (e: Exception) {
-                // Biarkan saja kalau error, lanjut cari link di server lain
                 e.printStackTrace()
             }
         }
