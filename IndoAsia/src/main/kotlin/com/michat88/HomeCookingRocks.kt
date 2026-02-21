@@ -5,14 +5,12 @@ import com.lagradost.cloudstream3.utils.*
 
 class HomeCookingRocks : MainAPI() {
     
-    // 1. Mengatur informasi dasar plugin
     override var name = "Home Cooking Rocks"
     override var mainUrl = "https://homecookingrocks.com"
     override var supportedTypes = setOf(TvType.Others, TvType.Movie) 
     override var lang = "id"
     override val hasMainPage = true
     
-    // 2. Kategori Halaman Depan
     override val mainPage = mainPageOf(
         "$mainUrl/category/asia-m/" to "Asia",
         "$mainUrl/category/vivamax/" to "VivaMax",
@@ -23,17 +21,8 @@ class HomeCookingRocks : MainAPI() {
         "$mainUrl/category/bokep-vietnam/" to "Vietnam Punya"
     )
 
-    // 3. Mengambil Halaman Utama
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse? {
-        val url = if (page == 1) {
-            request.data
-        } else {
-            "${request.data}page/$page/"
-        }
-        
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+        val url = if (page == 1) request.data else "${request.data}page/$page/"
         val document = app.get(url).document
         val elements = document.select("#gmr-main-load article")
         
@@ -47,17 +36,13 @@ class HomeCookingRocks : MainAPI() {
                 this.posterUrl = image
             }
         }
-        
         return newHomePageResponse(request.name, home, hasNext = elements.isNotEmpty())
     }
 
-    // 4. Pencarian
     override suspend fun search(query: String): List<SearchResponse>? {
         val searchUrl = "$mainUrl/?s=$query"
         val document = app.get(searchUrl).document
-        val elements = document.select("#gmr-main-load article")
-        
-        return elements.mapNotNull { element ->
+        return document.select("#gmr-main-load article").mapNotNull { element ->
             val titleElement = element.selectFirst(".entry-title a, h2 a")
             val title = titleElement?.text() ?: return@mapNotNull null
             val url = titleElement.attr("href")
@@ -69,17 +54,13 @@ class HomeCookingRocks : MainAPI() {
         }
     }
 
-    // 5. Load Detail
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
-
         val title = document.selectFirst("h1.entry-title")?.text() ?: return null
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
         val plot = document.select(".entry-content p").joinToString("\n") { it.text() }.trim()
-
         val year = document.selectFirst(".gmr-moviedata:contains(Tahun:) a")?.text()?.toIntOrNull()
         val ratingString = document.selectFirst(".gmr-meta-rating span[itemprop=ratingValue]")?.text()
-        
         val tags = document.select(".gmr-moviedata:contains(Genre:) a").map { it.text() }
 
         return newMovieLoadResponse(title, url, TvType.Movie, url) {
@@ -91,7 +72,6 @@ class HomeCookingRocks : MainAPI() {
         }
     }
 
-    // 6. Load Links
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -108,7 +88,7 @@ class HomeCookingRocks : MainAPI() {
 
             if (iframeSrc != null) {
                 // ==========================================
-                // SERVER 1: Pyrox
+                // SERVER 1: Pyrox (DIPERBAIKI)
                 // ==========================================
                 if (iframeSrc.contains("embedpyrox") || iframeSrc.contains("pyrox")) {
                     val iframeId = iframeSrc.substringAfterLast("/")
@@ -117,54 +97,61 @@ class HomeCookingRocks : MainAPI() {
 
                     val response = app.post(
                         url = apiUrl,
-                        headers = mapOf(
-                            "X-Requested-With" to "XMLHttpRequest",
-                            "Referer" to iframeSrc
-                        ),
+                        headers = mapOf("X-Requested-With" to "XMLHttpRequest", "Referer" to iframeSrc),
                         data = mapOf("hash" to iframeId, "r" to data)
                     ).text
 
-                    val m3u8Url = Regex("""(https:\\?/\\?/[^"]+(?:master\.txt|\.m3u8))""")
+                    var m3u8Url = Regex("""(https:\\?/\\?/[^"]+(?:master\.txt|\.m3u8))""")
                         .find(response)?.groupValues?.get(1)?.replace("\\/", "/")
+
+                    // FIX: Kalau berakhiran .txt, kita bongkar isinya untuk cari link m3u8 asli!
+                    if (m3u8Url?.endsWith("master.txt") == true) {
+                        val txtContent = app.get(m3u8Url, referer = iframeSrc).text
+                        val realM3u8 = Regex("""(https?://[^"'\s]+\.m3u8)""").find(txtContent)?.groupValues?.get(1)
+                        if (realM3u8 != null) m3u8Url = realM3u8
+                    }
 
                     if (m3u8Url != null) {
                         callback.invoke(
-                            newExtractorLink(
+                            ExtractorLink(
                                 source = name,
                                 name = "Server 1 (Pyrox)",
                                 url = m3u8Url,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = iframeSrc
-                                this.quality = Qualities.Unknown.value
-                            }
+                                referer = iframeSrc,
+                                quality = Qualities.Unknown.value,
+                                isM3u8 = true // Wajib di-true agar ExoPlayer tidak error!
+                            )
                         )
                     }
                 } 
                 // ==========================================
-                // SERVER 2: 4MePlayer (Diperbaiki menggunakan loadExtractor)
+                // SERVER 2: 4MePlayer
                 // ==========================================
                 else if (iframeSrc.contains("4meplayer")) {
-                    // Kita biarkan CloudStream yang membongkar enkripsi dinamisnya
-                    loadExtractor(
-                        url = iframeSrc,
-                        referer = data,
-                        subtitleCallback = subtitleCallback,
-                        callback = callback
-                    )
+                    loadExtractor(iframeSrc, data, subtitleCallback, callback)
                 }
                 // ==========================================
-                // SERVER 3 & 4: ImaxStreams (.com dan .net)
+                // SERVER 3 & 4: ImaxStreams (DIPERBAIKI)
                 // ==========================================
                 else if (iframeSrc.contains("imaxstreams")) {
                     val iframeHtml = app.get(iframeSrc, referer = data).text
+                    var pageText = iframeHtml
                     
-                    var m3u8Url = Regex("""(?:file|src)["']?\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""").find(iframeHtml)?.groupValues?.get(1)
-                        ?: Regex("""(https?://[^"'\s]+\.m3u8[^"'\s]*)""").find(iframeHtml)?.groupValues?.get(1)
+                    // FIX: Bongkar paksa packer script eval(p,a,c,k,e,d) pakai Unpacker bawaan CS3
+                    val packedRegex = Regex("""eval\(function\(p,a,c,k,e,.*?\)\)""")
+                    packedRegex.findAll(pageText).forEach { match ->
+                        val unpacked = com.lagradost.cloudstream3.utils.Unpacker.unpack(match.value)
+                        if (unpacked.isNotEmpty()) {
+                            pageText += "\n$unpacked" 
+                        }
+                    }
+
+                    var m3u8Url = Regex("""(?:file|src)["']?\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""").find(pageText)?.groupValues?.get(1)
+                        ?: Regex("""(https?://[^"'\s]+\.m3u8[^"'\s]*)""").find(pageText)?.groupValues?.get(1)
 
                     if (m3u8Url == null) {
                         val fileCode = Regex("""/e/([^/]+)|/embed/([^/]+)""").find(iframeSrc)?.groupValues?.drop(1)?.firstOrNull { it.isNotEmpty() }
-                        val hash = Regex("""["']?hash["']?\s*[:=]\s*["']([^"']+)["']""").find(iframeHtml)?.groupValues?.get(1)
+                        val hash = Regex("""["']?hash["']?\s*[:=]\s*["']([^"']+)["']""").find(pageText)?.groupValues?.get(1)
                         
                         if (fileCode != null && hash != null) {
                             val host = java.net.URI(iframeSrc).host
@@ -182,30 +169,24 @@ class HomeCookingRocks : MainAPI() {
 
                     if (m3u8Url != null) {
                         callback.invoke(
-                            newExtractorLink(
+                            ExtractorLink(
                                 source = name,
                                 name = "Server 3/4 (ImaxStreams)",
                                 url = m3u8Url,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = iframeSrc
-                                this.quality = Qualities.Unknown.value
-                            }
+                                referer = iframeSrc,
+                                quality = Qualities.Unknown.value,
+                                isM3u8 = true
+                            )
                         )
                     } else {
                         loadExtractor(iframeSrc, data, subtitleCallback, callback)
                     }
                 }
                 // ==========================================
-                // DEFAULT: Server Eksternal Lain
+                // DEFAULT: Server Lainnya
                 // ==========================================
                 else {
-                    loadExtractor(
-                        url = iframeSrc,
-                        referer = data,
-                        subtitleCallback = subtitleCallback,
-                        callback = callback
-                    )
+                    loadExtractor(iframeSrc, data, subtitleCallback, callback)
                 }
             }
         }
