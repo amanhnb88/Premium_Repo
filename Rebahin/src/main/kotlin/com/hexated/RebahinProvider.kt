@@ -106,7 +106,6 @@ class RebahinProvider : MainAPI() {
         val genres = doc.select("span[itemprop=genre]").map { it.text() }
         val year = doc.selectFirst("meta[itemprop=datePublished]")?.attr("content")?.substringBefore("-")?.toIntOrNull()
 
-        // Trailer Parser (Menghindari trailer rusak bawaan situs)
         val trailerUrl = doc.selectFirst("iframe#iframe-trailer")?.attr("src")
         val isValidTrailer = trailerUrl != null && trailerUrl.contains("youtube") && !trailerUrl.contains("http://googleusercontent.com/youtube.com")
 
@@ -139,7 +138,6 @@ class RebahinProvider : MainAPI() {
                 }
             }
         } else {
-            // PERUBAHAN: Gunakan url asli film secara langsung, tidak perlu ditambahkan /play/
             newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
                 this.plot = plot
@@ -162,7 +160,6 @@ class RebahinProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Akses halaman data (bisa halaman detail film atau halaman episode)
         val playDoc = app.get(
             data,
             headers = mapOf(
@@ -174,7 +171,6 @@ class RebahinProvider : MainAPI() {
 
         var handled = false
 
-        // Cari atribut "data-iframe" di list server yang berisi Base64 URL
         playDoc.select(".server[data-iframe]").forEach { serverTag ->
             try {
                 val base64Iframe = serverTag.attr("data-iframe")
@@ -197,7 +193,6 @@ class RebahinProvider : MainAPI() {
             }
         }
 
-        // Fallback: Jika tidak ada data-iframe, barangkali ada iframe biasa (jarang terjadi di tema ini)
         if (!handled) {
             playDoc.select("iframe[src]").forEach { iframe ->
                 try {
@@ -215,7 +210,6 @@ class RebahinProvider : MainAPI() {
         return handled
     }
 
-    // ── Parsing HTML server embed ─────────────────────────────
     private suspend fun processExternalEmbed(
         embedUrl: String,
         referer: String,
@@ -263,18 +257,18 @@ class RebahinProvider : MainAPI() {
                 }
             }
 
-            // Jika semua di atas gagal, paksa lempar ke extractor CloudStream barangkali ada keajaiban
             if (!found) {
                 loadExtractor(embedUrl, referer, subtitleCallback, callback)
             }
         } catch (e: Exception) {
             e.printStackTrace()
-            // Jika app.get() error (misal karena IP diblokir SSL), fallback ke extractor
             loadExtractor(embedUrl, referer, subtitleCallback, callback)
         }
     }
 
-    // ── Tembak API /ping rahasia untuk mendapatkan Video ──────
+    // ================================================================
+    // LOGIKA PERBAIKAN: DOUBLE PING & FINGERPRINT ID
+    // ================================================================
     private suspend fun processApiPing(
         baseOrigin: String,
         apiPath: String,
@@ -286,25 +280,37 @@ class RebahinProvider : MainAPI() {
             val csrfToken = Regex(""""_token"\s*:\s*"([^"]+)"""").find(pageHtml)
                 ?.groupValues?.get(1) ?: return false
 
-            val pingId = java.util.UUID.randomUUID().toString().replace("-", "")
+            // FIX: Gunakan visitorId asli yang ditemukan di browser Kiwi
+            val pingId = "80bd20c98ec8f2caf9c7f2190ca1f45e" 
             val apiUrl = "$baseOrigin$apiPath"
             
-            val requestPayload = mapOf(
-                "_token" to csrfToken,
-                "__type" to "dawn",
-                "pingID" to pingId
-            )
+            // TAHAP 1: Kirim Ping "dawn" (Inisialisasi)
+            val dawnPayload = mapOf("_token" to csrfToken, "__type" to "dawn", "pingID" to pingId)
+            val dawnResponse = app.post(
+                apiUrl,
+                headers = mapOf(
+                    "User-Agent"   to userAgent,
+                    "Content-Type" to "application/json",
+                    "Origin"       to baseOrigin,
+                    "Referer"      to embedUrl,
+                    "X-Requested-With" to "XMLHttpRequest"
+                ),
+                requestBody = dawnPayload.toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+            ).text
 
+            // TAHAP 2: Kirim Ping "flow" (Setelah Simulasi 2 Detik)
+            kotlinx.coroutines.delay(2000)
+            val flowPayload = mapOf("_token" to csrfToken, "__type" to "flow", "pingID" to pingId)
             val responseText = app.post(
                 apiUrl,
                 headers = mapOf(
                     "User-Agent"   to userAgent,
-                    "Accept"       to "*/*",
                     "Content-Type" to "application/json",
                     "Origin"       to baseOrigin,
                     "Referer"      to embedUrl,
+                    "X-Requested-With" to "XMLHttpRequest"
                 ),
-                requestBody = requestPayload.toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
+                requestBody = flowPayload.toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
             ).text
 
             var found = false
