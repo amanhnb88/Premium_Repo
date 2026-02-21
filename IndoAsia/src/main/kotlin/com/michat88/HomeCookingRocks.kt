@@ -119,17 +119,53 @@ class HomeCookingRocks : MainAPI() {
                         )
                         val allIframes = iframeRegex.findAll(serverHtml).map { it.groupValues[1] }.toList()
 
-                        // 3. Filter pintar: Prioritaskan 4MePlayer -> ImaxStreams -> Pyrox
-                        val iframeSrc = allIframes.firstOrNull { it.contains("4meplayer", ignoreCase = true) }
-                            ?: allIframes.firstOrNull { it.contains("imaxstreams", ignoreCase = true) }
-                            ?: allIframes.firstOrNull { it.contains("pyrox", ignoreCase = true) }
-                            ?: allIframes.firstOrNull()
+                        // 3. Filter pintar: Prioritaskan iframe yang mengandung kata kunci server kita
+                        val iframeSrc = allIframes.firstOrNull { src ->
+                            src.contains("pyrox", ignoreCase = true) || 
+                            src.contains("4meplayer", ignoreCase = true) || 
+                            src.contains("imaxstreams", ignoreCase = true)
+                        } ?: allIframes.firstOrNull()
 
                         if (iframeSrc != null) {
                             // ==========================================
-                            // PRIORITAS 1: 4MePlayer (Bypass AES)
+                            // SERVER 1: Pyrox
                             // ==========================================
-                            if (iframeSrc.contains("4meplayer")) {
+                            if (iframeSrc.contains("embedpyrox") || iframeSrc.contains("pyrox")) {
+                                val iframeId = iframeSrc.substringAfterLast("/")
+                                val host = java.net.URI(iframeSrc).host
+                                val apiUrl = "https://$host/player/index.php?data=$iframeId&do=getVideo"
+
+                                val response = app.post(
+                                    url = apiUrl,
+                                    headers = mapOf("X-Requested-With" to "XMLHttpRequest", "Referer" to iframeSrc),
+                                    data = mapOf("hash" to iframeId, "r" to data)
+                                ).text
+
+                                val m3u8Url = Regex("""(https:\\?\/\\?\/[^"]+(?:master\.txt|\.m3u8))""")
+                                    .find(response)?.groupValues?.get(1)?.replace("\\/", "/")
+
+                                if (m3u8Url != null) {
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            source = name,
+                                            name = "Server 1 (Pyrox)",
+                                            url = m3u8Url,
+                                            type = ExtractorLinkType.M3U8
+                                        ) {
+                                            this.referer = iframeSrc
+                                            this.quality = Qualities.Unknown.value
+                                            this.headers = mapOf(
+                                                "Origin" to "https://$host",
+                                                "Accept" to "*/*"
+                                            )
+                                        }
+                                    )
+                                }
+                            } 
+                            // ==========================================
+                            // SERVER 2: 4MePlayer (Bypass AES)
+                            // ==========================================
+                            else if (iframeSrc.contains("4meplayer")) {
                                 val videoId = iframeSrc.substringAfterLast("#")
                                 if (videoId.isNotEmpty() && videoId != iframeSrc) {
                                     val host = java.net.URI(iframeSrc).host
@@ -174,7 +210,7 @@ class HomeCookingRocks : MainAPI() {
                                                     callback.invoke(
                                                         newExtractorLink(
                                                             source = name,
-                                                            name = "Server 1 (4MePlayer)",
+                                                            name = "Server 2 (4MePlayer)",
                                                             url = m3u8Url,
                                                             type = ExtractorLinkType.M3U8
                                                         ) {
@@ -192,7 +228,7 @@ class HomeCookingRocks : MainAPI() {
                                 }
                             }
                             // ==========================================
-                            // PRIORITAS 2: ImaxStreams (Bypass Packed JS)
+                            // SERVER 3/4: ImaxStreams (Bypass Packed JS)
                             // ==========================================
                             else if (iframeSrc.contains("imaxstreams")) {
                                 // Tambahkan Referer agar tidak di-block oleh server
@@ -210,7 +246,7 @@ class HomeCookingRocks : MainAPI() {
                                     callback.invoke(
                                         newExtractorLink(
                                             source = name,
-                                            name = "Server 2 (ImaxStreams)",
+                                            name = "Server 3/4 (ImaxStreams)",
                                             url = m3u8Url,
                                             type = ExtractorLinkType.M3U8
                                         ) {
@@ -220,41 +256,6 @@ class HomeCookingRocks : MainAPI() {
                                     )
                                 }
                             }
-                            // ==========================================
-                            // PRIORITAS 3: Pyrox
-                            // ==========================================
-                            else if (iframeSrc.contains("embedpyrox") || iframeSrc.contains("pyrox")) {
-                                val iframeId = iframeSrc.substringAfterLast("/")
-                                val host = java.net.URI(iframeSrc).host
-                                val apiUrl = "https://$host/player/index.php?data=$iframeId&do=getVideo"
-
-                                val response = app.post(
-                                    url = apiUrl,
-                                    headers = mapOf("X-Requested-With" to "XMLHttpRequest", "Referer" to iframeSrc),
-                                    data = mapOf("hash" to iframeId, "r" to data)
-                                ).text
-
-                                val m3u8Url = Regex("""(https:\\?\/\\?\/[^"]+(?:master\.txt|\.m3u8))""")
-                                    .find(response)?.groupValues?.get(1)?.replace("\\/", "/")
-
-                                if (m3u8Url != null) {
-                                    callback.invoke(
-                                        newExtractorLink(
-                                            source = name,
-                                            name = "Server 3 (Pyrox)",
-                                            url = m3u8Url,
-                                            type = ExtractorLinkType.M3U8
-                                        ) {
-                                            this.referer = iframeSrc
-                                            this.quality = Qualities.Unknown.value
-                                            this.headers = mapOf(
-                                                "Origin" to "https://$host",
-                                                "Accept" to "*/*"
-                                            )
-                                        }
-                                    )
-                                }
-                            } 
                             // ==========================================
                             // DEFAULT: Ekstraktor Bawaan CloudStream
                             // ==========================================
