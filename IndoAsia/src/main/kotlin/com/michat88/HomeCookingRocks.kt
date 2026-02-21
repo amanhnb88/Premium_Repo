@@ -91,7 +91,7 @@ class HomeCookingRocks : MainAPI() {
         }
     }
 
-    // 6. Load Links (Sudah diperbaiki dengan format baru newExtractorLink)
+    // 6. Load Links
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -129,7 +129,6 @@ class HomeCookingRocks : MainAPI() {
 
                     if (m3u8Url != null) {
                         callback.invoke(
-                            // FORMAT BARU EXTRACTOR LINK CLOUDSTREAM:
                             newExtractorLink(
                                 source = name,
                                 name = "Server 1 (Pyrox)",
@@ -143,39 +142,16 @@ class HomeCookingRocks : MainAPI() {
                     }
                 } 
                 // ==========================================
-                // SERVER 2: 4MePlayer
+                // SERVER 2: 4MePlayer (Diperbaiki menggunakan loadExtractor)
                 // ==========================================
                 else if (iframeSrc.contains("4meplayer")) {
-                    val idMatch = Regex("""(?:id=|/v/|/e/)([\w-]+)""").find(iframeSrc)
-                    val id = idMatch?.groupValues?.get(1)
-
-                    if (id != null) {
-                        val host = java.net.URI(iframeSrc).host
-                        val webHost = java.net.URI(mainUrl).host
-                        val apiUrl = "https://$host/api/v1/video?id=$id&r=$webHost"
-
-                        val response = app.get(
-                            url = apiUrl,
-                            headers = mapOf("Referer" to iframeSrc)
-                        ).text
-
-                        val m3u8Url = Regex("""(https:\\?/\\?/[^"]+\.m3u8[^"]*)""")
-                            .find(response)?.groupValues?.get(1)?.replace("\\/", "/")
-
-                        if (m3u8Url != null) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = name,
-                                    name = "Server 2 (4MePlayer)",
-                                    url = m3u8Url,
-                                    type = ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = iframeSrc
-                                    this.quality = Qualities.Unknown.value
-                                }
-                            )
-                        }
-                    }
+                    // Kita biarkan CloudStream yang membongkar enkripsi dinamisnya
+                    loadExtractor(
+                        url = iframeSrc,
+                        referer = data,
+                        subtitleCallback = subtitleCallback,
+                        callback = callback
+                    )
                 }
                 // ==========================================
                 // SERVER 3 & 4: ImaxStreams (.com dan .net)
