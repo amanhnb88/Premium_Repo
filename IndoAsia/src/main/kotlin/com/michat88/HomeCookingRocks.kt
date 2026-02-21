@@ -5,14 +5,12 @@ import com.lagradost.cloudstream3.utils.*
 
 class HomeCookingRocks : MainAPI() {
     
-    // 1. Mengatur informasi dasar plugin
     override var name = "Home Cooking Rocks"
     override var mainUrl = "https://homecookingrocks.com"
     override var supportedTypes = setOf(TvType.Others, TvType.Movie) 
     override var lang = "id"
     override val hasMainPage = true
     
-    // 2. Kategori Halaman Depan
     override val mainPage = mainPageOf(
         "$mainUrl/category/asia-m/" to "Asia",
         "$mainUrl/category/vivamax/" to "VivaMax",
@@ -23,17 +21,8 @@ class HomeCookingRocks : MainAPI() {
         "$mainUrl/category/bokep-vietnam/" to "Vietnam Punya"
     )
 
-    // 3. Mengambil Halaman Utama
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse? {
-        val url = if (page == 1) {
-            request.data
-        } else {
-            "${request.data}page/$page/"
-        }
-        
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+        val url = if (page == 1) request.data else "${request.data}page/$page/"
         val document = app.get(url).document
         val elements = document.select("#gmr-main-load article")
         
@@ -47,17 +36,13 @@ class HomeCookingRocks : MainAPI() {
                 this.posterUrl = image
             }
         }
-        
         return newHomePageResponse(request.name, home, hasNext = elements.isNotEmpty())
     }
 
-    // 4. Pencarian
     override suspend fun search(query: String): List<SearchResponse>? {
         val searchUrl = "$mainUrl/?s=$query"
         val document = app.get(searchUrl).document
-        val elements = document.select("#gmr-main-load article")
-        
-        return elements.mapNotNull { element ->
+        return document.select("#gmr-main-load article").mapNotNull { element ->
             val titleElement = element.selectFirst(".entry-title a, h2 a")
             val title = titleElement?.text() ?: return@mapNotNull null
             val url = titleElement.attr("href")
@@ -69,17 +54,13 @@ class HomeCookingRocks : MainAPI() {
         }
     }
 
-    // 5. Load Detail
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
-
         val title = document.selectFirst("h1.entry-title")?.text() ?: return null
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
         val plot = document.select(".entry-content p").joinToString("\n") { it.text() }.trim()
-
         val year = document.selectFirst(".gmr-moviedata:contains(Tahun:) a")?.text()?.toIntOrNull()
         val ratingString = document.selectFirst(".gmr-meta-rating span[itemprop=ratingValue]")?.text()
-        
         val tags = document.select(".gmr-moviedata:contains(Genre:) a").map { it.text() }
 
         return newMovieLoadResponse(title, url, TvType.Movie, url) {
@@ -91,7 +72,6 @@ class HomeCookingRocks : MainAPI() {
         }
     }
 
-    // 6. Load Links (Sudah diperbaiki dengan format baru newExtractorLink)
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -102,71 +82,69 @@ class HomeCookingRocks : MainAPI() {
         val servers = document.select(".muvipro-player-tabs li a")
 
         for (server in servers) {
-            val serverUrl = fixUrl(server.attr("href"))
-            val serverDoc = if (serverUrl == data) document else app.get(serverUrl).document
-            val iframeSrc = serverDoc.selectFirst(".gmr-embed-responsive iframe")?.attr("src")
+            // FIX: Tambahkan try-catch agar kalau server error, aplikasi nggak force close
+            try {
+                val serverUrl = fixUrl(server.attr("href"))
+                val serverDoc = if (serverUrl == data) document else app.get(serverUrl).document
+                val iframeSrc = serverDoc.selectFirst(".gmr-embed-responsive iframe")?.attr("src")
 
-            if (iframeSrc != null) {
-                // ==========================================
-                // SERVER 1: Pyrox
-                // ==========================================
-                if (iframeSrc.contains("embedpyrox") || iframeSrc.contains("pyrox")) {
-                    val iframeId = iframeSrc.substringAfterLast("/")
-                    val host = java.net.URI(iframeSrc).host
-                    val apiUrl = "https://$host/player/index.php?data=$iframeId&do=getVideo"
-
-                    val response = app.post(
-                        url = apiUrl,
-                        headers = mapOf(
-                            "X-Requested-With" to "XMLHttpRequest",
-                            "Referer" to iframeSrc
-                        ),
-                        data = mapOf("hash" to iframeId, "r" to data)
-                    ).text
-
-                    val m3u8Url = Regex("""(https:\\?/\\?/[^"]+(?:master\.txt|\.m3u8))""")
-                        .find(response)?.groupValues?.get(1)?.replace("\\/", "/")
-
-                    if (m3u8Url != null) {
-                        callback.invoke(
-                            // FORMAT BARU EXTRACTOR LINK CLOUDSTREAM:
-                            newExtractorLink(
-                                source = name,
-                                name = "Server 1 (Pyrox)",
-                                url = m3u8Url,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = iframeSrc
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
-                    }
-                } 
-                // ==========================================
-                // SERVER 2: 4MePlayer
-                // ==========================================
-                else if (iframeSrc.contains("4meplayer")) {
-                    val idMatch = Regex("""(?:id=|/v/|/e/)([\w-]+)""").find(iframeSrc)
-                    val id = idMatch?.groupValues?.get(1)
-
-                    if (id != null) {
+                if (iframeSrc != null) {
+                    // ==========================================
+                    // SERVER 1: Pyrox
+                    // ==========================================
+                    if (iframeSrc.contains("embedpyrox") || iframeSrc.contains("pyrox")) {
+                        val iframeId = iframeSrc.substringAfterLast("/")
                         val host = java.net.URI(iframeSrc).host
-                        val webHost = java.net.URI(mainUrl).host
-                        val apiUrl = "https://$host/api/v1/video?id=$id&r=$webHost"
+                        val apiUrl = "https://$host/player/index.php?data=$iframeId&do=getVideo"
 
-                        val response = app.get(
+                        val response = app.post(
                             url = apiUrl,
-                            headers = mapOf("Referer" to iframeSrc)
+                            headers = mapOf("X-Requested-With" to "XMLHttpRequest", "Referer" to iframeSrc),
+                            data = mapOf("hash" to iframeId, "r" to data)
                         ).text
 
-                        val m3u8Url = Regex("""(https:\\?/\\?/[^"]+\.m3u8[^"]*)""")
+                        val m3u8Url = Regex("""(https:\\?/\\?/[^"]+(?:master\.txt|\.m3u8))""")
                             .find(response)?.groupValues?.get(1)?.replace("\\/", "/")
 
                         if (m3u8Url != null) {
                             callback.invoke(
                                 newExtractorLink(
                                     source = name,
-                                    name = "Server 2 (4MePlayer)",
+                                    name = "Server 1 (Pyrox)",
+                                    url = m3u8Url,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = iframeSrc
+                                    this.quality = Qualities.Unknown.value
+                                    // FIX: Tambahkan Headers agar tidak kena M3U8 Error
+                                    this.headers = mapOf(
+                                        "Origin" to "https://$host",
+                                        "Accept" to "*/*"
+                                    )
+                                }
+                            )
+                        }
+                    } 
+                    // ==========================================
+                    // SERVER 2 & 3: 4MePlayer & ImaxStreams
+                    // ==========================================
+                    else if (iframeSrc.contains("4meplayer") || iframeSrc.contains("imaxstreams")) {
+                        // SENJATA RAHASIA CLOUDSTREAM: WebViewResolver!
+                        // Ini akan merender halaman secara tak kasat mata dan merampok link m3u8 nya.
+                        val serverName = if (iframeSrc.contains("4meplayer")) "Server 2 (4MePlayer)" else "Server 3/4 (ImaxStreams)"
+                        
+                        val response = app.get(
+                            url = iframeSrc,
+                            referer = data,
+                            interceptor = com.lagradost.cloudstream3.network.WebViewResolver(Regex("""\.m3u8"""))
+                        )
+                        val m3u8Url = response.url
+                        
+                        if (m3u8Url.contains(".m3u8")) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = name,
+                                    name = serverName,
                                     url = m3u8Url,
                                     type = ExtractorLinkType.M3U8
                                 ) {
@@ -176,61 +154,16 @@ class HomeCookingRocks : MainAPI() {
                             )
                         }
                     }
-                }
-                // ==========================================
-                // SERVER 3 & 4: ImaxStreams (.com dan .net)
-                // ==========================================
-                else if (iframeSrc.contains("imaxstreams")) {
-                    val iframeHtml = app.get(iframeSrc, referer = data).text
-                    
-                    var m3u8Url = Regex("""(?:file|src)["']?\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""").find(iframeHtml)?.groupValues?.get(1)
-                        ?: Regex("""(https?://[^"'\s]+\.m3u8[^"'\s]*)""").find(iframeHtml)?.groupValues?.get(1)
-
-                    if (m3u8Url == null) {
-                        val fileCode = Regex("""/e/([^/]+)|/embed/([^/]+)""").find(iframeSrc)?.groupValues?.drop(1)?.firstOrNull { it.isNotEmpty() }
-                        val hash = Regex("""["']?hash["']?\s*[:=]\s*["']([^"']+)["']""").find(iframeHtml)?.groupValues?.get(1)
-                        
-                        if (fileCode != null && hash != null) {
-                            val host = java.net.URI(iframeSrc).host
-                            val webHost = java.net.URI(mainUrl).host
-                            val ajaxUrl = "https://$host/dl?op=view&file_code=$fileCode&hash=$hash&embed=1&referer=$webHost&adb=1&hls4=1"
-                            
-                            val ajaxResponse = app.get(
-                                url = ajaxUrl, 
-                                headers = mapOf("Referer" to iframeSrc, "X-Requested-With" to "XMLHttpRequest")
-                            ).text
-                            
-                            m3u8Url = Regex("""(https?://[^"'\s]+\.m3u8[^"'\s]*)""").find(ajaxResponse)?.groupValues?.get(1)
-                        }
-                    }
-
-                    if (m3u8Url != null) {
-                        callback.invoke(
-                            newExtractorLink(
-                                source = name,
-                                name = "Server 3/4 (ImaxStreams)",
-                                url = m3u8Url,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = iframeSrc
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
-                    } else {
+                    // ==========================================
+                    // DEFAULT: Server Lainnya
+                    // ==========================================
+                    else {
                         loadExtractor(iframeSrc, data, subtitleCallback, callback)
                     }
                 }
-                // ==========================================
-                // DEFAULT: Server Eksternal Lain
-                // ==========================================
-                else {
-                    loadExtractor(
-                        url = iframeSrc,
-                        referer = data,
-                        subtitleCallback = subtitleCallback,
-                        callback = callback
-                    )
-                }
+            } catch (e: Exception) {
+                // Biarkan saja kalau error, lanjut cari link di server lain
+                e.printStackTrace()
             }
         }
         return true
