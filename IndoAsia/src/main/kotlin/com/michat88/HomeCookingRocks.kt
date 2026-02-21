@@ -104,7 +104,6 @@ class HomeCookingRocks : MainAPI() {
                     var m3u8Url = Regex("""(https:\\?/\\?/[^"]+(?:master\.txt|\.m3u8))""")
                         .find(response)?.groupValues?.get(1)?.replace("\\/", "/")
 
-                    // FIX: Ambil link m3u8 asli kalau dikasih file .txt
                     if (m3u8Url?.endsWith("master.txt") == true) {
                         val txtContent = app.get(m3u8Url, referer = iframeSrc).text
                         val realM3u8 = Regex("""(https?://[^"'\s]+\.m3u8)""").find(txtContent)?.groupValues?.get(1)
@@ -112,7 +111,6 @@ class HomeCookingRocks : MainAPI() {
                     }
 
                     if (m3u8Url != null) {
-                        // FIX: Menggunakan newExtractorLink kembali dengan type M3U8
                         callback.invoke(
                             newExtractorLink(
                                 source = name,
@@ -139,11 +137,11 @@ class HomeCookingRocks : MainAPI() {
                     val iframeHtml = app.get(iframeSrc, referer = data).text
                     var pageText = iframeHtml
                     
-                    // FIX: Bongkar paksa packer script
+                    // FIX: Menggunakan JsUnpacker yang benar
                     val packedRegex = Regex("""eval\(function\(p,a,c,k,e,.*?\)\)""")
                     packedRegex.findAll(pageText).forEach { match ->
-                        val unpacked = com.lagradost.cloudstream3.utils.Unpacker.unpack(match.value)
-                        if (unpacked.isNotEmpty()) {
+                        val unpacked = JsUnpacker(match.value).unpack()
+                        if (!unpacked.isNullOrEmpty()) {
                             pageText += "\n$unpacked" 
                         }
                     }
@@ -170,7 +168,6 @@ class HomeCookingRocks : MainAPI() {
                     }
 
                     if (m3u8Url != null) {
-                        // FIX: Menggunakan newExtractorLink kembali dengan type M3U8
                         callback.invoke(
                             newExtractorLink(
                                 source = name,
