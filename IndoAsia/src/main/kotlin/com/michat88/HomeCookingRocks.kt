@@ -6,13 +6,13 @@ import com.lagradost.cloudstream3.utils.*
 class HomeCookingRocks : MainAPI() {
     
     // 1. Mengatur informasi dasar plugin
-    override var name = "Home Cooking Rocks" // Nama yang akan muncul di aplikasi
-    override var mainUrl = "https://homecookingrocks.com" // URL utama situs
+    override var name = "Home Cooking Rocks"
+    override var mainUrl = "https://homecookingrocks.com"
     override var supportedTypes = setOf(TvType.Others, TvType.Movie) 
-    override var lang = "id" // Bahasa (Karena isinya subtitle Indonesia)
-    override val hasMainPage = true // Menandakan bahwa plugin ini punya halaman utama
+    override var lang = "id"
+    override val hasMainPage = true
     
-    // 2. Mendefinisikan kategori halaman depan (Sudah dirapikan sesuai permintaanmu)
+    // 2. Kategori Halaman Depan
     override val mainPage = mainPageOf(
         "$mainUrl/category/asia-m/" to "Asia",
         "$mainUrl/category/vivamax/" to "VivaMax",
@@ -23,12 +23,11 @@ class HomeCookingRocks : MainAPI() {
         "$mainUrl/category/bokep-vietnam/" to "Vietnam Punya"
     )
 
-    // 3. Fungsi untuk mengambil daftar film di halaman utama (Mendukung Infinite Scroll / Halaman 2,3, dst)
+    // 3. Mengambil Halaman Utama
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse? {
-        // Logika untuk halaman (Paginasi)
         val url = if (page == 1) {
             request.data
         } else {
@@ -52,7 +51,7 @@ class HomeCookingRocks : MainAPI() {
         return newHomePageResponse(request.name, home, hasNext = elements.isNotEmpty())
     }
 
-    // 4. Fungsi untuk mencari film
+    // 4. Pencarian
     override suspend fun search(query: String): List<SearchResponse>? {
         val searchUrl = "$mainUrl/?s=$query"
         val document = app.get(searchUrl).document
@@ -70,7 +69,7 @@ class HomeCookingRocks : MainAPI() {
         }
     }
 
-    // 5. Fungsi untuk memuat detail informasi film (Gambar kualitas HD, Sinopsis, Rating, dll)
+    // 5. Load Detail (Diperbaiki Error addActors)
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
@@ -82,7 +81,6 @@ class HomeCookingRocks : MainAPI() {
         val ratingString = document.selectFirst(".gmr-meta-rating span[itemprop=ratingValue]")?.text()
         
         val tags = document.select(".gmr-moviedata:contains(Genre:) a").map { it.text() }
-        val actors = document.select(".gmr-moviedata:contains(Pemain:) a").map { it.text() }
 
         return newMovieLoadResponse(title, url, TvType.Movie, url) {
             this.posterUrl = poster
@@ -90,11 +88,11 @@ class HomeCookingRocks : MainAPI() {
             this.year = year
             this.tags = tags
             this.score = Score.from10(ratingString)
-            addActors(actors)
+            // addActors(actors) -> Dihapus untuk mengatasi error Unresolved Reference
         }
     }
 
-    // 6. Fungsi "Pamungkas" untuk menarik tautan video asli dari berbagai jenis server
+    // 6. Load Links (Diperbaiki Error ExtractorLink -> newExtractorLink)
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -111,7 +109,7 @@ class HomeCookingRocks : MainAPI() {
 
             if (iframeSrc != null) {
                 // ==========================================
-                // LOGIKA SERVER 1: Pyrox
+                // SERVER 1: Pyrox
                 // ==========================================
                 if (iframeSrc.contains("embedpyrox") || iframeSrc.contains("pyrox")) {
                     val iframeId = iframeSrc.substringAfterLast("/")
@@ -124,10 +122,7 @@ class HomeCookingRocks : MainAPI() {
                             "X-Requested-With" to "XMLHttpRequest",
                             "Referer" to iframeSrc
                         ),
-                        data = mapOf(
-                            "hash" to iframeId,
-                            "r" to data
-                        )
+                        data = mapOf("hash" to iframeId, "r" to data)
                     ).text
 
                     val m3u8Url = Regex("""(https:\\?/\\?/[^"]+(?:master\.txt|\.m3u8))""")
@@ -135,7 +130,7 @@ class HomeCookingRocks : MainAPI() {
 
                     if (m3u8Url != null) {
                         callback.invoke(
-                            ExtractorLink(
+                            newExtractorLink( // <-- Menggunakan format baru
                                 source = name,
                                 name = "Server 1 (Pyrox)",
                                 url = m3u8Url,
@@ -147,7 +142,7 @@ class HomeCookingRocks : MainAPI() {
                     }
                 } 
                 // ==========================================
-                // LOGIKA SERVER 2: 4MePlayer
+                // SERVER 2: 4MePlayer
                 // ==========================================
                 else if (iframeSrc.contains("4meplayer")) {
                     val idMatch = Regex("""(?:id=|/v/|/e/)([\w-]+)""").find(iframeSrc)
@@ -168,7 +163,7 @@ class HomeCookingRocks : MainAPI() {
 
                         if (m3u8Url != null) {
                             callback.invoke(
-                                ExtractorLink(
+                                newExtractorLink( // <-- Menggunakan format baru
                                     source = name,
                                     name = "Server 2 (4MePlayer)",
                                     url = m3u8Url,
@@ -181,16 +176,14 @@ class HomeCookingRocks : MainAPI() {
                     }
                 }
                 // ==========================================
-                // LOGIKA SERVER 3 & 4: ImaxStreams (.com dan .net)
+                // SERVER 3 & 4: ImaxStreams (.com dan .net)
                 // ==========================================
                 else if (iframeSrc.contains("imaxstreams")) {
                     val iframeHtml = app.get(iframeSrc, referer = data).text
                     
-                    // Cara 1: Coba cari langsung link .m3u8 dari dalam HTML
                     var m3u8Url = Regex("""(?:file|src)["']?\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""").find(iframeHtml)?.groupValues?.get(1)
                         ?: Regex("""(https?://[^"'\s]+\.m3u8[^"'\s]*)""").find(iframeHtml)?.groupValues?.get(1)
 
-                    // Cara 2: Jika disembunyikan pakai AJAX, curi token (hash) nya dan panggil API mereka
                     if (m3u8Url == null) {
                         val fileCode = Regex("""/e/([^/]+)|/embed/([^/]+)""").find(iframeSrc)?.groupValues?.drop(1)?.firstOrNull { it.isNotEmpty() }
                         val hash = Regex("""["']?hash["']?\s*[:=]\s*["']([^"']+)["']""").find(iframeHtml)?.groupValues?.get(1)
@@ -211,7 +204,7 @@ class HomeCookingRocks : MainAPI() {
 
                     if (m3u8Url != null) {
                         callback.invoke(
-                            ExtractorLink(
+                            newExtractorLink( // <-- Menggunakan format baru
                                 source = name,
                                 name = "Server 3/4 (ImaxStreams)",
                                 url = m3u8Url,
@@ -221,12 +214,11 @@ class HomeCookingRocks : MainAPI() {
                             )
                         )
                     } else {
-                        // Jika gagal semua, lempar ke Cloudstream
                         loadExtractor(iframeSrc, data, subtitleCallback, callback)
                     }
                 }
                 // ==========================================
-                // LOGIKA DEFAULT: Server Eksternal Lain (YouTube, DoodStream, dll)
+                // DEFAULT: Server Eksternal Lain
                 // ==========================================
                 else {
                     loadExtractor(
