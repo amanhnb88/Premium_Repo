@@ -11,7 +11,6 @@ class FourMePlayerExtractor : ExtractorApi() {
     override val mainUrl = "https://ichinime.4meplayer.pro"
     override val requiresReferer = true
 
-    @Suppress("DEPRECATION") // Mantra agar tidak error di sistem build
     override suspend fun getUrl(
         url: String,
         referer: String?,
@@ -30,55 +29,83 @@ class FourMePlayerExtractor : ExtractorApi() {
                     "Accept" to "*/*",
                     "Origin" to "https://$host",
                     "Referer" to "https://$host/",
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    "User-Agent" to USER_AGENT // Menggunakan default CS3 agar aman dari Cloudflare
                 )
             ).text.trim().replace("\"", "")
 
-            if (responseText.isEmpty() || !responseText.matches(Regex("^[0-9a-fA-F]+$"))) {
-                return 
-            }
+            // Cek apakah responnya Hexadecimal (Bukan HTML blokir)
+            if (responseText.isEmpty() || !responseText.matches(Regex("^[0-9a-fA-F]+$"))) return 
 
             val dataBytes = responseText.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
             val keySpec = SecretKeySpec("kiemtienmua911ca".toByteArray(), "AES")
-            val ivBytes = byteArrayOf(
-                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x00,
-                0x6f, 0x00, 0x6f, 0x73, 0x20, 0x1e
-            )
-            val ivSpec = IvParameterSpec(ivBytes)
-            
-            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-            cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
-            
-            val decryptedJson = String(cipher.doFinal())
-            val cleanJson = decryptedJson.substringAfter("{", "").let { if (it.isNotEmpty()) "{$it" else decryptedJson }
-            
-            val sourceMatch = Regex(""""source"\s*:\s*"([^"]+)"""").find(cleanJson)?.groupValues?.get(1)?.replace("\\/", "/")
-            val tiktokMatch = Regex(""""hlsVideoTiktok"\s*:\s*"([^"]+)"""").find(cleanJson)?.groupValues?.get(1)?.replace("\\/", "/")
-            
-            if (sourceMatch != null) {
-                callback.invoke(
-                    ExtractorLink(
-                        source = name,
-                        name = "Server 2 (4MePlayer)",
-                        url = sourceMatch,
-                        referer = url,
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = true
-                    )
-                )
+            var decryptedJson: String? = null
+
+            // KEMBALIKAN BRUTE-FORCE GOD MODE (Cuma butuh 1 Milidetik!)
+            loop@ for (vLen in 0..30) {
+                val q = vLen * (vLen + 2)
+                for (vChar in 32..126) {
+                    try {
+                        val ivBytes = ByteArray(16)
+                        var index = 0
+                        for (ke in 1..9) ivBytes[index++] = (ke + q).toByte()
+                        val tt = 111 + vLen
+                        val k = tt + 4
+                        val Me = vChar * 1 - 2
+                        
+                        ivBytes[index++] = q.toByte()
+                        ivBytes[index++] = 111.toByte()
+                        ivBytes[index++] = 0.toByte()
+                        ivBytes[index++] = tt.toByte()
+                        ivBytes[index++] = k.toByte()
+                        ivBytes[index++] = vChar.toByte()
+                        ivBytes[index++] = Me.toByte()
+
+                        val ivSpec = IvParameterSpec(ivBytes)
+                        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+                        cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
+                        
+                        val resultStr = String(cipher.doFinal())
+                        if (resultStr.contains("m3u8") && resultStr.contains("{")) {
+                            decryptedJson = resultStr
+                            break@loop
+                        }
+                    } catch (e: Exception) {
+                        // Abaikan error tebakan yang salah
+                    }
+                }
             }
-            if (tiktokMatch != null) {
-                val fullTiktokUrl = if (tiktokMatch.startsWith("http")) tiktokMatch else "https://$host$tiktokMatch"
-                callback.invoke(
-                    ExtractorLink(
-                        source = name,
-                        name = "Server 2 (TikTok HLS)",
-                        url = fullTiktokUrl,
-                        referer = url,
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = true
+
+            if (decryptedJson != null) {
+                val cleanJson = decryptedJson.substringAfter("{", "").let { if (it.isNotEmpty()) "{$it" else decryptedJson }
+                val sourceMatch = Regex(""""source"\s*:\s*"([^"]+)"""").find(cleanJson)?.groupValues?.get(1)?.replace("\\/", "/")
+                val tiktokMatch = Regex(""""hlsVideoTiktok"\s*:\s*"([^"]+)"""").find(cleanJson)?.groupValues?.get(1)?.replace("\\/", "/")
+                
+                if (sourceMatch != null) {
+                    // Menggunakan newExtractorLink resmi agar lolos Build
+                    callback.invoke(
+                        newExtractorLink(
+                            source = name,
+                            name = "Server 2 (4MePlayer)",
+                            url = sourceMatch,
+                            referer = url,
+                            quality = Qualities.Unknown.value,
+                            isM3u8 = true
+                        )
                     )
-                )
+                }
+                if (tiktokMatch != null) {
+                    val fullTiktokUrl = if (tiktokMatch.startsWith("http")) tiktokMatch else "https://$host$tiktokMatch"
+                    callback.invoke(
+                        newExtractorLink(
+                            source = name,
+                            name = "Server 2 (TikTok HLS)",
+                            url = fullTiktokUrl,
+                            referer = url,
+                            quality = Qualities.Unknown.value,
+                            isM3u8 = true
+                        )
+                    )
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()
