@@ -3,11 +3,7 @@ package com.hexated
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.nicehttp.RequestBodyTypes
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody.Companion.toRequestBody
+import com.lagradost.cloudstream3.network.WebViewResolver
 import org.jsoup.nodes.Element
 import java.util.Base64
 
@@ -152,7 +148,7 @@ class RebahinProvider : MainAPI() {
     }
 
     // ================================================================
-    // EKSTRAK LINK VIDEO (BASE64 DECODE AMAN)
+    // EKSTRAK LINK VIDEO (MENGGUNAKAN WEBVIEW RESOLVER)
     // ================================================================
     override suspend fun loadLinks(
         data: String,
@@ -164,7 +160,7 @@ class RebahinProvider : MainAPI() {
             data,
             headers = mapOf(
                 "User-Agent"      to userAgent,
-                "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Accept-Language" to "id-ID,id;q=0.9",
                 "Referer"         to mainUrl,
             )
         ).document
@@ -181,11 +177,8 @@ class RebahinProvider : MainAPI() {
 
                     if (embedUrl != null) {
                         handled = true
-                        if (embedUrl.contains("95.214.54.154") || embedUrl.contains("rebahin")) {
-                            processExternalEmbed(embedUrl, data, subtitleCallback, callback)
-                        } else {
-                            loadExtractor(embedUrl, data, subtitleCallback, callback)
-                        }
+                        // Semua server sekarang diproses dengan WebView agar aman
+                        processExternalEmbed(embedUrl, data, subtitleCallback, callback)
                     }
                 }
             } catch (e: Exception) {
@@ -198,7 +191,7 @@ class RebahinProvider : MainAPI() {
                 try {
                     val src = iframe.attr("src")
                     if (src.isNotEmpty() && !src.contains("youtube") && !src.contains("googleusercontent")) {
-                        loadExtractor(src, data, subtitleCallback, callback)
+                        processExternalEmbed(src, data, subtitleCallback, callback)
                         handled = true
                     }
                 } catch (e: Exception) {
@@ -217,47 +210,38 @@ class RebahinProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val baseOrigin = embedUrl.substringBefore("/embed").let {
-                if (it.startsWith("http")) it else "https://$it"
-            }
+            // WEBVIEW MAGIC: Intercept semua domain video yang kita temukan tadi
+            // Ini akan otomatis menangani Dawn/Flow Ping dan Service Worker Abyss
+            val interceptor = WebViewResolver(
+                Regex(".*daisy\\.groovy\\.monster.*|.*\\.sssrr\\.org.*|.*\\.m3u8.*|.*\\.mp4.*|.*abysscdn\\.com.*")
+            )
 
-            val html = app.get(
-                embedUrl,
-                headers = mapOf(
-                    "User-Agent"      to userAgent,
-                    "Accept"          to "text/html,application/xhtml+xml,*/*;q=0.8",
-                    "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8",
-                    "Referer"         to referer,
+            // Buka halaman dan biarkan JavaScript bekerja selama 30 detik
+            val response = app.get(embedUrl, referer = referer, interceptor = interceptor, timeout = 30)
+            val finalUrl = response.url
+
+            // Jika link video asli ditemukan melalui interceptor
+            if (finalUrl.contains("daisy.groovy.monster") || finalUrl.contains("sssrr.org") || finalUrl.contains(".m3u8")) {
+                val isJuicy = finalUrl.contains("daisy")
+                val isAbyss = finalUrl.contains("sssrr")
+
+                callback.invoke(
+                    newExtractorLink(
+                        source  = name,
+                        name    = if (isJuicy) "Server Juicy" else if (isAbyss) "Server Abyss" else "Premium Server",
+                        url     = finalUrl,
+                        referer = embedUrl,
+                        type    = if (finalUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        this.headers = mapOf(
+                            "User-Agent" to userAgent,
+                            "Referer"    to embedUrl,
+                            "Origin"     to embedUrl.substringBefore("/embed")
+                        )
+                    }
                 )
-            ).text
-
-            var found = false
-            Regex(""""file"\s*:\s*"(https?://[^"]+\.m3u8[^"]*)"""").findAll(html).forEach { m ->
-                found = true
-                callback.invoke(buildExtractorLink(m.groupValues[1], embedUrl, isM3u8 = true))
-            }
-
-            if (!found) {
-                Regex(""""file"\s*:\s*"(https?://[^"]+\.mp4[^"]*)"""").findAll(html).forEach { m ->
-                    found = true
-                    callback.invoke(buildExtractorLink(m.groupValues[1], embedUrl, isM3u8 = false))
-                }
-            }
-
-            if (!found) {
-                val apiPathMatch = Regex("""['"](/api/videos/[^'"]+/ping)['"]""").find(html)
-                if (apiPathMatch != null) {
-                    found = processApiPing(
-                        baseOrigin,
-                        apiPathMatch.groupValues[1],
-                        html,
-                        embedUrl,
-                        callback
-                    )
-                }
-            }
-
-            if (!found) {
+            } else {
+                // Jika WebView gagal menangkap link dinamis, coba ekstraktor standar
                 loadExtractor(embedUrl, referer, subtitleCallback, callback)
             }
         } catch (e: Exception) {
@@ -266,113 +250,7 @@ class RebahinProvider : MainAPI() {
         }
     }
 
-    // ================================================================
-    // LOGIKA PERBAIKAN: DOUBLE PING & FINGERPRINT ID
-    // ================================================================
-    private suspend fun processApiPing(
-        baseOrigin: String,
-        apiPath: String,
-        pageHtml: String,
-        embedUrl: String,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        return try {
-            val csrfToken = Regex(""""_token"\s*:\s*"([^"]+)"""").find(pageHtml)
-                ?.groupValues?.get(1) ?: return false
-
-            // FIX: Gunakan visitorId asli yang ditemukan di browser Kiwi
-            val pingId = "80bd20c98ec8f2caf9c7f2190ca1f45e" 
-            val apiUrl = "$baseOrigin$apiPath"
-            
-            // TAHAP 1: Kirim Ping "dawn" (Inisialisasi)
-            val dawnPayload = mapOf("_token" to csrfToken, "__type" to "dawn", "pingID" to pingId)
-            val dawnResponse = app.post(
-                apiUrl,
-                headers = mapOf(
-                    "User-Agent"   to userAgent,
-                    "Content-Type" to "application/json",
-                    "Origin"       to baseOrigin,
-                    "Referer"      to embedUrl,
-                    "X-Requested-With" to "XMLHttpRequest"
-                ),
-                requestBody = dawnPayload.toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
-            ).text
-
-            // TAHAP 2: Kirim Ping "flow" (Setelah Simulasi 2 Detik)
-            kotlinx.coroutines.delay(2000)
-            val flowPayload = mapOf("_token" to csrfToken, "__type" to "flow", "pingID" to pingId)
-            val responseText = app.post(
-                apiUrl,
-                headers = mapOf(
-                    "User-Agent"   to userAgent,
-                    "Content-Type" to "application/json",
-                    "Origin"       to baseOrigin,
-                    "Referer"      to embedUrl,
-                    "X-Requested-With" to "XMLHttpRequest"
-                ),
-                requestBody = flowPayload.toJson().toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull())
-            ).text
-
-            var found = false
-            val cdnToken = generateCdnToken()
-
-            fun appendToken(url: String): String {
-                if (cdnToken == null) return url
-                return if (url.contains("daisy.groovy.monster") && !url.contains("token=")) {
-                    if (url.contains("?")) "$url&token=$cdnToken" else "$url?token=$cdnToken"
-                } else url
-            }
-
-            val apiData = tryParseJson<ApiPingResponse>(responseText)
-
-            apiData?.sources?.forEach { source ->
-                source.file?.let { fileUrl ->
-                    found = true
-                    val finalUrl = appendToken(fileUrl)
-                    val isM3u8 = finalUrl.contains(".m3u8") || source.type == "hls"
-                    callback.invoke(buildExtractorLink(finalUrl, embedUrl, isM3u8))
-                }
-            }
-
-            if (!found && apiData?.file != null) {
-                found = true
-                val finalUrl = appendToken(apiData.file)
-                val isM3u8 = finalUrl.contains(".m3u8")
-                callback.invoke(buildExtractorLink(finalUrl, embedUrl, isM3u8))
-            }
-
-            if (!found) {
-                Regex(""""(https?://[^"]+\.m3u8[^"]*)"""").findAll(responseText).forEach { m ->
-                    found = true
-                    callback.invoke(buildExtractorLink(appendToken(m.groupValues[1]), embedUrl, isM3u8 = true))
-                }
-                Regex(""""(https?://[^"]+\.mp4[^"]*)"""").findAll(responseText).forEach { m ->
-                    found = true
-                    callback.invoke(buildExtractorLink(appendToken(m.groupValues[1]), embedUrl, isM3u8 = false))
-                }
-            }
-
-            found
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        }
-    }
-
-    private suspend fun getClientIp(): String? {
-        return try {
-            app.get("https://api.ipify.org").text.trim()
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private suspend fun generateCdnToken(ua: String = userAgent): String? {
-        val clientIp = getClientIp() ?: return null
-        val raw = "$clientIp~~$ua"
-        return Base64.getEncoder().encodeToString(raw.toByteArray())
-    }
-
+    // Fungsi helper tambahan untuk kualitas link standar
     private suspend fun buildExtractorLink(
         url: String,
         referer: String,
@@ -389,10 +267,7 @@ class RebahinProvider : MainAPI() {
             this.quality = quality
             this.headers = mapOf(
                 "User-Agent" to userAgent,
-                "Referer"    to referer,
-                "Origin"     to referer.substringBefore("/embed").let {
-                    if (it.startsWith("http")) it else "https://$it"
-                }
+                "Referer"    to referer
             )
         }
     }
