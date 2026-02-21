@@ -69,7 +69,7 @@ class HomeCookingRocks : MainAPI() {
         }
     }
 
-    // 5. Load Detail (Diperbaiki Error addActors)
+    // 5. Load Detail
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
@@ -88,11 +88,10 @@ class HomeCookingRocks : MainAPI() {
             this.year = year
             this.tags = tags
             this.score = Score.from10(ratingString)
-            // addActors(actors) -> Dihapus untuk mengatasi error Unresolved Reference
         }
     }
 
-    // 6. Load Links (Diperbaiki Error ExtractorLink -> newExtractorLink)
+    // 6. Load Links (Sudah diperbaiki dengan format baru newExtractorLink)
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -130,14 +129,16 @@ class HomeCookingRocks : MainAPI() {
 
                     if (m3u8Url != null) {
                         callback.invoke(
-                            newExtractorLink( // <-- Menggunakan format baru
+                            // FORMAT BARU EXTRACTOR LINK CLOUDSTREAM:
+                            newExtractorLink(
                                 source = name,
                                 name = "Server 1 (Pyrox)",
                                 url = m3u8Url,
-                                referer = iframeSrc,
-                                quality = Qualities.Unknown.value,
-                                isM3u8 = true
-                            )
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = iframeSrc
+                                this.quality = Qualities.Unknown.value
+                            }
                         )
                     }
                 } 
@@ -163,14 +164,15 @@ class HomeCookingRocks : MainAPI() {
 
                         if (m3u8Url != null) {
                             callback.invoke(
-                                newExtractorLink( // <-- Menggunakan format baru
+                                newExtractorLink(
                                     source = name,
                                     name = "Server 2 (4MePlayer)",
                                     url = m3u8Url,
-                                    referer = iframeSrc,
-                                    quality = Qualities.Unknown.value,
-                                    isM3u8 = true
-                                )
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = iframeSrc
+                                    this.quality = Qualities.Unknown.value
+                                }
                             )
                         }
                     }
@@ -204,14 +206,15 @@ class HomeCookingRocks : MainAPI() {
 
                     if (m3u8Url != null) {
                         callback.invoke(
-                            newExtractorLink( // <-- Menggunakan format baru
+                            newExtractorLink(
                                 source = name,
                                 name = "Server 3/4 (ImaxStreams)",
                                 url = m3u8Url,
-                                referer = iframeSrc,
-                                quality = Qualities.Unknown.value,
-                                isM3u8 = true
-                            )
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = iframeSrc
+                                this.quality = Qualities.Unknown.value
+                            }
                         )
                     } else {
                         loadExtractor(iframeSrc, data, subtitleCallback, callback)
