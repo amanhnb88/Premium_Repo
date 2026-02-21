@@ -82,113 +82,88 @@ class HomeCookingRocks : MainAPI() {
         val servers = document.select(".muvipro-player-tabs li a")
 
         for (server in servers) {
-            val serverUrl = fixUrl(server.attr("href"))
-            val serverDoc = if (serverUrl == data) document else app.get(serverUrl).document
-            val iframeSrc = serverDoc.selectFirst(".gmr-embed-responsive iframe")?.attr("src")
+            // FIX: Tambahkan try-catch agar kalau server error, aplikasi nggak force close
+            try {
+                val serverUrl = fixUrl(server.attr("href"))
+                val serverDoc = if (serverUrl == data) document else app.get(serverUrl).document
+                val iframeSrc = serverDoc.selectFirst(".gmr-embed-responsive iframe")?.attr("src")
 
-            if (iframeSrc != null) {
-                // ==========================================
-                // SERVER 1: Pyrox
-                // ==========================================
-                if (iframeSrc.contains("embedpyrox") || iframeSrc.contains("pyrox")) {
-                    val iframeId = iframeSrc.substringAfterLast("/")
-                    val host = java.net.URI(iframeSrc).host
-                    val apiUrl = "https://$host/player/index.php?data=$iframeId&do=getVideo"
+                if (iframeSrc != null) {
+                    // ==========================================
+                    // SERVER 1: Pyrox
+                    // ==========================================
+                    if (iframeSrc.contains("embedpyrox") || iframeSrc.contains("pyrox")) {
+                        val iframeId = iframeSrc.substringAfterLast("/")
+                        val host = java.net.URI(iframeSrc).host
+                        val apiUrl = "https://$host/player/index.php?data=$iframeId&do=getVideo"
 
-                    val response = app.post(
-                        url = apiUrl,
-                        headers = mapOf("X-Requested-With" to "XMLHttpRequest", "Referer" to iframeSrc),
-                        data = mapOf("hash" to iframeId, "r" to data)
-                    ).text
+                        val response = app.post(
+                            url = apiUrl,
+                            headers = mapOf("X-Requested-With" to "XMLHttpRequest", "Referer" to iframeSrc),
+                            data = mapOf("hash" to iframeId, "r" to data)
+                        ).text
 
-                    var m3u8Url = Regex("""(https:\\?/\\?/[^"]+(?:master\.txt|\.m3u8))""")
-                        .find(response)?.groupValues?.get(1)?.replace("\\/", "/")
+                        val m3u8Url = Regex("""(https:\\?/\\?/[^"]+(?:master\.txt|\.m3u8))""")
+                            .find(response)?.groupValues?.get(1)?.replace("\\/", "/")
 
-                    if (m3u8Url?.endsWith("master.txt") == true) {
-                        val txtContent = app.get(m3u8Url, referer = iframeSrc).text
-                        val realM3u8 = Regex("""(https?://[^"'\s]+\.m3u8)""").find(txtContent)?.groupValues?.get(1)
-                        if (realM3u8 != null) m3u8Url = realM3u8
-                    }
-
-                    if (m3u8Url != null) {
-                        callback.invoke(
-                            newExtractorLink(
-                                source = name,
-                                name = "Server 1 (Pyrox)",
-                                url = m3u8Url,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = iframeSrc
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
-                    }
-                } 
-                // ==========================================
-                // SERVER 2: 4MePlayer
-                // ==========================================
-                else if (iframeSrc.contains("4meplayer")) {
-                    loadExtractor(iframeSrc, data, subtitleCallback, callback)
-                }
-                // ==========================================
-                // SERVER 3 & 4: ImaxStreams
-                // ==========================================
-                else if (iframeSrc.contains("imaxstreams")) {
-                    val iframeHtml = app.get(iframeSrc, referer = data).text
-                    var pageText = iframeHtml
-                    
-                    // FIX: Menggunakan JsUnpacker yang benar
-                    val packedRegex = Regex("""eval\(function\(p,a,c,k,e,.*?\)\)""")
-                    packedRegex.findAll(pageText).forEach { match ->
-                        val unpacked = JsUnpacker(match.value).unpack()
-                        if (!unpacked.isNullOrEmpty()) {
-                            pageText += "\n$unpacked" 
+                        if (m3u8Url != null) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = name,
+                                    name = "Server 1 (Pyrox)",
+                                    url = m3u8Url,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = iframeSrc
+                                    this.quality = Qualities.Unknown.value
+                                    // FIX: Tambahkan Headers agar tidak kena M3U8 Error
+                                    this.headers = mapOf(
+                                        "Origin" to "https://$host",
+                                        "Accept" to "*/*"
+                                    )
+                                }
+                            )
                         }
-                    }
-
-                    var m3u8Url = Regex("""(?:file|src)["']?\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""").find(pageText)?.groupValues?.get(1)
-                        ?: Regex("""(https?://[^"'\s]+\.m3u8[^"'\s]*)""").find(pageText)?.groupValues?.get(1)
-
-                    if (m3u8Url == null) {
-                        val fileCode = Regex("""/e/([^/]+)|/embed/([^/]+)""").find(iframeSrc)?.groupValues?.drop(1)?.firstOrNull { it.isNotEmpty() }
-                        val hash = Regex("""["']?hash["']?\s*[:=]\s*["']([^"']+)["']""").find(pageText)?.groupValues?.get(1)
+                    } 
+                    // ==========================================
+                    // SERVER 2 & 3: 4MePlayer & ImaxStreams
+                    // ==========================================
+                    else if (iframeSrc.contains("4meplayer") || iframeSrc.contains("imaxstreams")) {
+                        // SENJATA RAHASIA CLOUDSTREAM: WebViewResolver!
+                        // Ini akan merender halaman secara tak kasat mata dan merampok link m3u8 nya.
+                        val serverName = if (iframeSrc.contains("4meplayer")) "Server 2 (4MePlayer)" else "Server 3/4 (ImaxStreams)"
                         
-                        if (fileCode != null && hash != null) {
-                            val host = java.net.URI(iframeSrc).host
-                            val webHost = java.net.URI(mainUrl).host
-                            val ajaxUrl = "https://$host/dl?op=view&file_code=$fileCode&hash=$hash&embed=1&referer=$webHost&adb=1&hls4=1"
-                            
-                            val ajaxResponse = app.get(
-                                url = ajaxUrl, 
-                                headers = mapOf("Referer" to iframeSrc, "X-Requested-With" to "XMLHttpRequest")
-                            ).text
-                            
-                            m3u8Url = Regex("""(https?://[^"'\s]+\.m3u8[^"'\s]*)""").find(ajaxResponse)?.groupValues?.get(1)
+                        val response = app.get(
+                            url = iframeSrc,
+                            referer = data,
+                            interceptor = com.lagradost.cloudstream3.network.WebViewResolver(Regex("""\.m3u8"""))
+                        )
+                        val m3u8Url = response.url
+                        
+                        if (m3u8Url.contains(".m3u8")) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = name,
+                                    name = serverName,
+                                    url = m3u8Url,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = iframeSrc
+                                    this.quality = Qualities.Unknown.value
+                                }
+                            )
                         }
                     }
-
-                    if (m3u8Url != null) {
-                        callback.invoke(
-                            newExtractorLink(
-                                source = name,
-                                name = "Server 3/4 (ImaxStreams)",
-                                url = m3u8Url,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = iframeSrc
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
-                    } else {
+                    // ==========================================
+                    // DEFAULT: Server Lainnya
+                    // ==========================================
+                    else {
                         loadExtractor(iframeSrc, data, subtitleCallback, callback)
                     }
                 }
-                // ==========================================
-                // DEFAULT: Server Lainnya
-                // ==========================================
-                else {
-                    loadExtractor(iframeSrc, data, subtitleCallback, callback)
-                }
+            } catch (e: Exception) {
+                // Biarkan saja kalau error, lanjut cari link di server lain
+                e.printStackTrace()
             }
         }
         return true
