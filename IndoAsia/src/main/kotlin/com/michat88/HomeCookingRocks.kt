@@ -84,7 +84,7 @@ class HomeCookingRocks : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Bypass Jsoup document, ambil string murni agar super ringan
+        // Ambil HTML halaman utama tanpa Jsoup agar ringan
         val html = app.get(data).text
 
         val tabsBlockMatch = Regex("""class=["'][^"']*muvipro-player-tabs[^"']*["'][^>]*>(.*?)</ul>""", RegexOption.DOT_MATCHES_ALL).find(html)
@@ -98,19 +98,28 @@ class HomeCookingRocks : MainAPI() {
             listOf(data)
         }
 
-        // Prioritaskan link dari halaman ini di urutan pertama
+        // Prioritaskan server utama (halaman saat ini) di urutan pertama
         val sortedUrls = rawServerUrls.sortedBy { url ->
             if (url == data) 0 else 1
         }
 
-        // Proses Paralel Asinkronus Kecepatan Tinggi
+        // Eksekusi semua URL tab secara serentak (Parallel Concurrency)
         coroutineScope {
             sortedUrls.forEach { serverUrl ->
                 launch(Dispatchers.IO) {
                     try {
                         val serverHtml = if (serverUrl == data) html else app.get(serverUrl).text
-                        val iframeMatch = Regex("""class=["'][^"']*gmr-embed-responsive[^"']*["'][^>]*>.*?<iframe[^>]+src=["']([^"']+)["']""", RegexOption.DOT_MATCHES_ALL).find(serverHtml)
-                        val iframeSrc = iframeMatch?.groupValues?.get(1)
+                        
+                        // REGEX SAPU BERSIH: Abaikan div wrapper, langsung cari iframe!
+                        val iframeRegex = Regex("""<iframe[^>]+src=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                        val allIframes = iframeRegex.findAll(serverHtml).map { it.groupValues[1] }.toList()
+
+                        // Filter pintar: Prioritaskan iframe yang mengandung kata kunci server kita
+                        val iframeSrc = allIframes.firstOrNull { src ->
+                            src.contains("pyrox", ignoreCase = true) || 
+                            src.contains("4meplayer", ignoreCase = true) || 
+                            src.contains("imaxstreams", ignoreCase = true)
+                        } ?: allIframes.firstOrNull()
 
                         if (iframeSrc != null) {
                             // ==========================================
@@ -208,7 +217,7 @@ class HomeCookingRocks : MainAPI() {
                                                 }
                                             }
                                         } catch (e: Exception) {
-                                            // Abaikan, maju ke endpoint selanjutnya
+                                            // Lanjut coba endpoint lain
                                         }
                                     }
                                 }
@@ -217,13 +226,11 @@ class HomeCookingRocks : MainAPI() {
                             // SERVER 3/4: ImaxStreams (Bypass Packed JS)
                             // ==========================================
                             else if (iframeSrc.contains("imaxstreams")) {
-                                // Tembak iframe untuk mengambil html murni
                                 val iframeHtml = app.get(iframeSrc, referer = data).text
                                 
-                                // Bongkar JS packer menggunakan fungsi bawaan utils CloudStream
+                                // Langsung bongkar JS pakai fungsi bawaan
                                 val unpackedText = getAndUnpack(iframeHtml)
                                 
-                                // Tangkap M3U8 dengan Regex (prioritaskan teks yang diunpack)
                                 val m3u8Regex = """"([^"]+\.m3u8[^"]*)"""".toRegex()
                                 val match = m3u8Regex.find(unpackedText) ?: m3u8Regex.find(iframeHtml)
                                 
