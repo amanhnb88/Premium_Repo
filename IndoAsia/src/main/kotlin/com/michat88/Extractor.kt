@@ -29,18 +29,20 @@ class FourMePlayerExtractor : ExtractorApi() {
                     "Accept" to "*/*",
                     "Origin" to "https://$host",
                     "Referer" to "https://$host/",
-                    "User-Agent" to USER_AGENT // Menggunakan default CS3 agar aman dari Cloudflare
+                    "User-Agent" to USER_AGENT // Menggunakan bawaan CloudStream agar anti blokir
                 )
             ).text.trim().replace("\"", "")
 
-            // Cek apakah responnya Hexadecimal (Bukan HTML blokir)
-            if (responseText.isEmpty() || !responseText.matches(Regex("^[0-9a-fA-F]+$"))) return 
+            // PENGAMAN: Cek apakah diblokir Cloudflare (Bukan Hexadecimal)
+            if (responseText.isEmpty() || !responseText.matches(Regex("^[0-9a-fA-F]+$"))) {
+                return 
+            }
 
             val dataBytes = responseText.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
             val keySpec = SecretKeySpec("kiemtienmua911ca".toByteArray(), "AES")
             var decryptedJson: String? = null
 
-            // KEMBALIKAN BRUTE-FORCE GOD MODE (Cuma butuh 1 Milidetik!)
+            // MESIN BRUTE-FORCE 1 MILIDETIK
             loop@ for (vLen in 0..30) {
                 val q = vLen * (vLen + 2)
                 for (vChar in 32..126) {
@@ -70,27 +72,29 @@ class FourMePlayerExtractor : ExtractorApi() {
                             break@loop
                         }
                     } catch (e: Exception) {
-                        // Abaikan error tebakan yang salah
+                        // Abaikan kalau tebakan IV salah (Padding Error)
                     }
                 }
             }
 
             if (decryptedJson != null) {
                 val cleanJson = decryptedJson.substringAfter("{", "").let { if (it.isNotEmpty()) "{$it" else decryptedJson }
+                
                 val sourceMatch = Regex(""""source"\s*:\s*"([^"]+)"""").find(cleanJson)?.groupValues?.get(1)?.replace("\\/", "/")
                 val tiktokMatch = Regex(""""hlsVideoTiktok"\s*:\s*"([^"]+)"""").find(cleanJson)?.groupValues?.get(1)?.replace("\\/", "/")
                 
                 if (sourceMatch != null) {
-                    // Menggunakan newExtractorLink resmi agar lolos Build
+                    // PENGGUNAAN BUILDER YANG BENAR (Bebas Prerelease Error)
                     callback.invoke(
                         newExtractorLink(
                             source = name,
                             name = "Server 2 (4MePlayer)",
                             url = sourceMatch,
-                            referer = url,
-                            quality = Qualities.Unknown.value,
-                            isM3u8 = true
-                        )
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = url
+                            this.quality = Qualities.Unknown.value
+                        }
                     )
                 }
                 if (tiktokMatch != null) {
@@ -100,10 +104,11 @@ class FourMePlayerExtractor : ExtractorApi() {
                             source = name,
                             name = "Server 2 (TikTok HLS)",
                             url = fullTiktokUrl,
-                            referer = url,
-                            quality = Qualities.Unknown.value,
-                            isM3u8 = true
-                        )
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = url
+                            this.quality = Qualities.Unknown.value
+                        }
                     )
                 }
             }
