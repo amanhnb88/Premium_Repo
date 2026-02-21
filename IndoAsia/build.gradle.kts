@@ -24,6 +24,6 @@ cloudstream {
     )
 
 
-    iconUrl = "https://klikxxi.me/wp-content/uploads/2024/02/cropped-site-icon.png"
+    iconUrl = "https://homecookingrocks.com/wp-content/uploads/2024/10/cropped-indomax21-favicon-color-1.png"
 
 }
