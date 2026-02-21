@@ -13,7 +13,8 @@ class HomeCookingRocks : MainAPI() {
     
     override var name = "Home Cooking Rocks"
     override var mainUrl = "https://homecookingrocks.com"
-    override var supportedTypes = setOf(TvType.Others, TvType.Movie) 
+    // DITAMBAHKAN LABEL NSFW DI SINI 👇
+    override var supportedTypes = setOf(TvType.NSFW) 
     override var lang = "id"
     override val hasMainPage = true
     
