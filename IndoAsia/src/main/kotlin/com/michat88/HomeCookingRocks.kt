@@ -88,6 +88,9 @@ class HomeCookingRocks : MainAPI() {
                 val iframeSrc = serverDoc.selectFirst(".gmr-embed-responsive iframe")?.attr("src")
 
                 if (iframeSrc != null) {
+                    // ==========================================
+                    // SERVER 1: Pyrox
+                    // ==========================================
                     if (iframeSrc.contains("embedpyrox") || iframeSrc.contains("pyrox")) {
                         val iframeId = iframeSrc.substringAfterLast("/")
                         val host = java.net.URI(iframeSrc).host
@@ -102,8 +105,8 @@ class HomeCookingRocks : MainAPI() {
                         var m3u8Url = Regex("""(https:\\?/\\?/[^"]+(?:master\.txt|\.m3u8))""")
                             .find(response)?.groupValues?.get(1)?.replace("\\/", "/")
 
-                        // FIX ANTI CRASH SERVER 1 (Menggabungkan Relative Path M3U8)
-                        if (m3u8Url?.endsWith("master.txt") == true) {
+                        // Mencegah Crash M3U8 harus contains TS files dari master.txt yang isinya link relative
+                        if (m3u8Url != null && m3u8Url.endsWith("master.txt")) {
                             val txtContent = app.get(m3u8Url, referer = iframeSrc).text
                             val realM3u8 = Regex("""(https?://[^"'\s]+\.m3u8)""").find(txtContent)?.groupValues?.get(1)
                             if (realM3u8 != null) {
@@ -123,22 +126,28 @@ class HomeCookingRocks : MainAPI() {
                                     source = name,
                                     name = "Server 1 (Pyrox)",
                                     url = m3u8Url,
-                                    referer = iframeSrc,
-                                    quality = Qualities.Unknown.value,
-                                    isM3u8 = true,
-                                    headers = mapOf(
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = iframeSrc
+                                    this.quality = Qualities.Unknown.value
+                                    this.headers = mapOf(
                                         "Origin" to "https://$host",
                                         "Referer" to iframeSrc,
                                         "Accept" to "*/*"
                                     )
-                                )
+                                }
                             )
                         }
                     } 
-                    // MEMANGGIL CLASS EXTRACTOR SERVER 2
+                    // ==========================================
+                    // SERVER 2: 4MePlayer (MEMANGGIL EXTRACTOR API)
+                    // ==========================================
                     else if (iframeSrc.contains("4meplayer")) {
                         FourMePlayerExtractor().getUrl(iframeSrc, data, subtitleCallback, callback)
                     }
+                    // ==========================================
+                    // SERVER 3 & 4: ImaxStreams
+                    // ==========================================
                     else if (iframeSrc.contains("imaxstreams")) {
                         val iframeHtml = app.get(iframeSrc, referer = data).text
                         var pageText = iframeHtml
@@ -178,10 +187,11 @@ class HomeCookingRocks : MainAPI() {
                                     source = name,
                                     name = "Server 3/4 (ImaxStreams)",
                                     url = m3u8Url,
-                                    referer = iframeSrc,
-                                    quality = Qualities.Unknown.value,
-                                    isM3u8 = true
-                                )
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = iframeSrc
+                                    this.quality = Qualities.Unknown.value
+                                }
                             )
                         } else {
                             loadExtractor(iframeSrc, data, subtitleCallback, callback)
