@@ -7,7 +7,10 @@ import android.content.Context
 @CloudstreamPlugin
 class HomeCookingRocksPlugin : Plugin() {
     override fun load(context: Context) {
-        // Mendaftarkan kelas utama (HomeCookingRocks) agar terbaca oleh Cloudstream
+        // Mendaftarkan Provider Utama (Website HomeCookingRocks)
         registerMainAPI(HomeCookingRocks())
+        
+        // Mendaftarkan Extractor Khusus untuk Server 2 (4MePlayer)
+        registerExtractorAPI(FourMePlayerExtractor())
     }
 }
